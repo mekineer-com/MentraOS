@@ -5,6 +5,7 @@
   "workspaces": [
     "cloud-v2/packages/*",
     "miniapps/*",
+    "!miniapps/openalma",
     "sdk/miniapp-cli",
     "mobile/modules/miniapp"
   ],
