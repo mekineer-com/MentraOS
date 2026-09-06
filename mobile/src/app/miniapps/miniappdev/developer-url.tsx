@@ -11,7 +11,7 @@ import {useNavigationStore} from "@/stores/navigation"
 import {translate} from "@/i18n"
 import showAlert from "@/utils/AlertUtils"
 import {decideDevLaunchRoute, engine} from "@mentra/engine"
-import {registerDevApp, type DevAppRecord} from "@mentra/engine-host-internal"
+import {appRegistry, registerDevApp, type DevAppRecord} from "@mentra/engine-host-internal"
 import {askPermissionsUI, checkPermissionsUI, PERMISSION_CONFIG} from "@/utils/PermissionsUtils"
 import {storage} from "@/utils/storage/storage"
 import type {AppletInterface, AppletPermission} from "@mentra/engine"
@@ -138,6 +138,24 @@ export default function MiniappDeveloperUrlScreen() {
       showAlert(translate("debugSettings:miniappUrlEmptyTitle"), translate("debugSettings:miniappUrlEmptyBody"), [
         {text: "OK"},
       ])
+      return
+    }
+    if (trimmed.startsWith("miniapp://release")) {
+      setLoading(true)
+      try {
+        const releaseUrl = new URL(trimmed)
+        const baseUrl = decodeURIComponent(releaseUrl.searchParams.get("url") || "")
+        if (!baseUrl) throw new Error("release link missing url param")
+        const result = await appRegistry.installFromJsonUrl(baseUrl)
+        if (result.is_error()) throw result.error
+        showAlert("Installed", `${result.value.name} v${result.value.version} is on your home screen.`, [
+          {text: "OK", onPress: () => goBack()},
+        ])
+      } catch (error) {
+        showAlert("Install failed", String(error), [{text: "OK"}])
+      } finally {
+        setLoading(false)
+      }
       return
     }
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {

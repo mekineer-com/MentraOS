@@ -33,7 +33,7 @@ await $({ stdio: 'inherit' })`bun expo prebuild --platform android`;
 if (nameSuffix) {
   const gsPath = 'android/app/google-services.json'
   const gs = JSON.parse(await readFile(gsPath, 'utf-8'))
-  const newPkg = `com.mentra.mentra.${nameSuffix}`
+  const newPkg = `com.mentra.mentra.${nameSuffix.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}`
   const baseClient = gs.client?.find(
     (c) => c.client_info?.android_client_info?.package_name === 'com.mentra.mentra',
   )
@@ -52,7 +52,7 @@ if (nameSuffix) {
 await $({stdio: "inherit"})`bun expo export --platform android --clear`
 
 // Build release APK
-await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease`;
+await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx3072m`;
 
 // Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
 // Mentra Live glasses are also attached (adb fails on "more than one device").
