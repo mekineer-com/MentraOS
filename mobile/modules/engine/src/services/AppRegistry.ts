@@ -141,6 +141,7 @@ interface InstalledLma {
 
 export interface MiniappReleaseIdentity {
   source: "direct_download" | "bundled_asset" | "preinstalled_registry" | "dev_snapshot"
+  sourceUrl?: string
   releaseId?: string
   bundleSha256?: string
   channel?: string
@@ -518,7 +519,9 @@ class AppRegistry {
       if (!packageName) throw new Error("miniapp.json missing packageName")
       if (!version) throw new Error("miniapp.json missing version")
 
-      const installRes = await appRegistry.installFromUrl(`${trimmed}/bundle.zip`)
+      const installRes = await this.installFromUrl(`${trimmed}/bundle.zip`, {
+        releaseIdentity: {source: "direct_download", sourceUrl: trimmed},
+      })
       if (installRes.is_error()) throw installRes.error
 
       return {packageName, version, name}

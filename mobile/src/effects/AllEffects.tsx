@@ -1,6 +1,7 @@
 import {ButtonActions} from "@/effects/ButtonActions"
 import {GalleryModeSync} from "@/effects/GalleryModeSync"
 import {MemoryWarningMonitor} from "@/effects/MemoryWarningMonitor"
+import {IrisUpdatePrompt} from "@/effects/IrisUpdatePrompt"
 import {MtkUpdateAlert} from "@/effects/MtkUpdateAlert"
 import {Reconnect} from "@/effects/Reconnect"
 import {ConsoleLogger} from "@/utils/dev/console"
@@ -37,6 +38,7 @@ export const AllEffects = () => {
       <Compositor />
       <QrScanOverlay />
       <MemoryWarningMonitor />
+      <IrisUpdatePrompt />
     </>
   )
 }
