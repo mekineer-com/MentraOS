@@ -1,8 +1,5 @@
 const en = {
   irisUpdate: {
-    title: "Iris update ready",
-    message: "Install Iris {{version}} now?",
-    install: "Install",
     failedTitle: "Iris update failed",
   },
   deviceSettings: {

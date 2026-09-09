@@ -1,15 +1,15 @@
 import {useEffect, useRef} from "react"
 import {AppState} from "react-native"
 import * as Application from "expo-application"
-import semver from "semver"
 
 import {showAlert} from "@/contexts/ModalContext"
 import {translate} from "@/i18n"
 import {engine} from "@mentra/engine"
 import {appRegistry} from "@mentra/engine-host-internal"
+import {IRIS_PACKAGE, isIrisOffer} from "./irisUpdateOffer"
 
 const HOST_PACKAGE = "com.mentra.mentra.openalma"
-const IRIS_PACKAGE = "com.openalma.mentra"
+const DEFAULT_IRIS_SOURCE = "http://10.77.0.1:6789"
 
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
@@ -23,8 +23,8 @@ export function IrisUpdatePrompt() {
       checking.current = true
       try {
         const installed = await appRegistry.getActiveVersion(IRIS_PACKAGE)
-        const sourceUrl = appRegistry.getReleaseIdentity(IRIS_PACKAGE, installed)?.sourceUrl
-        if (!sourceUrl) return
+        const sourceUrl = (installed && appRegistry.getReleaseIdentity(IRIS_PACKAGE, installed)?.sourceUrl) ||
+          DEFAULT_IRIS_SOURCE
 
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 2000)
@@ -38,21 +38,9 @@ export function IrisUpdatePrompt() {
         } finally {
           clearTimeout(timeout)
         }
-        if (manifest.packageName !== IRIS_PACKAGE || typeof manifest.version !== "string" ||
-          !semver.valid(installed) || !semver.valid(manifest.version) || !semver.gt(manifest.version, installed) ||
-          offered.current === manifest.version) return
+        if (!isIrisOffer(manifest, offered.current)) return
 
         offered.current = manifest.version
-        const choice = await showAlert({
-          title: translate("irisUpdate:title"),
-          message: translate("irisUpdate:message", {version: manifest.version}),
-          buttons: [
-            {text: translate("common:cancel"), style: "cancel"},
-            {text: translate("irisUpdate:install")},
-          ],
-        })
-        if (choice !== 1) return
-
         try {
           const result = await appRegistry.installFromJsonUrl(sourceUrl)
           if (result.is_error()) throw result.error
