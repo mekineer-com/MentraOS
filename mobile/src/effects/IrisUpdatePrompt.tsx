@@ -5,11 +5,12 @@ import * as Application from "expo-application"
 import {showAlert} from "@/contexts/ModalContext"
 import {translate} from "@/i18n"
 import {engine} from "@mentra/engine"
-import {appRegistry} from "@mentra/engine-host-internal"
+import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
 import {IRIS_PACKAGE, isIrisOffer} from "./irisUpdateOffer"
 
 const HOST_PACKAGE = "com.mentra.mentra.openalma"
 const DEFAULT_IRIS_SOURCE = "http://10.77.0.1:6789"
+const IRIS_PROFILE_KEY = "openalma.connection-profile"
 
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
@@ -29,11 +30,21 @@ export function IrisUpdatePrompt() {
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 2000)
         let manifest: {packageName?: unknown; version?: unknown}
+        let profile: string
         try {
-          const response = await fetch(`${sourceUrl}/miniapp.json`, {signal: controller.signal})
-          if (!response.ok) return
-          manifest = await response.json()
+          const [manifestResponse, profileResponse] = await Promise.all([
+            fetch(`${sourceUrl}/miniapp.json`, {signal: controller.signal}),
+            fetch(`${sourceUrl}/openalma-profile.json`, {signal: controller.signal}),
+          ])
+          if (!manifestResponse.ok || !profileResponse.ok) {
+            offered.current = null
+            return
+          }
+          manifest = await manifestResponse.json()
+          profile = await profileResponse.text()
+          JSON.parse(profile)
         } catch {
+          offered.current = null
           return
         } finally {
           clearTimeout(timeout)
@@ -44,6 +55,7 @@ export function IrisUpdatePrompt() {
         try {
           const result = await appRegistry.installFromJsonUrl(sourceUrl)
           if (result.is_error()) throw result.error
+          await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, profile)
           await engine.miniapps.refresh()
           await engine.miniapps.setForeground(IRIS_PACKAGE)
         } catch (error) {

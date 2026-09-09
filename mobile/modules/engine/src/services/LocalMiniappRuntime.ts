@@ -859,6 +859,10 @@ class LocalMiniappRuntime {
     })
   }
 
+  public setSimpleStorage(packageName: string, key: string, value: string): Promise<void> {
+    return this.simpleStorage.set(packageName, key, value)
+  }
+
   /**
    * Graceful version of {@link unregisterApp}: notify the miniapp via
    * `WILL_DISCONNECT`, wait ~50ms so its `beforeDisconnect` handlers can
