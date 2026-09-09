@@ -53,9 +53,10 @@ export function IrisUpdatePrompt() {
 
         offered.current = setup.offerId
         try {
-          await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
+          await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
           const result = await appRegistry.installFromJsonUrl(sourceUrl)
           if (result.is_error()) throw result.error
+          await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
           const acknowledgement = await fetch(`${sourceUrl}/__mentra_release/installed`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
