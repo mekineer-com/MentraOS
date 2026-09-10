@@ -1,6 +1,7 @@
 const en = {
   irisUpdate: {
     failedTitle: "Iris update failed",
+    completionFailedTitle: "Iris installed; setup incomplete",
   },
   deviceSettings: {
     title: "Device Settings",

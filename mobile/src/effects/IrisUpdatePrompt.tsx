@@ -15,6 +15,7 @@ const IRIS_PROFILE_KEY = "openalma.connection-profile"
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
   const offered = useRef<string | null>(null)
+  const installedOffer = useRef<string | null>(null)
 
   useEffect(() => {
     if (Application.applicationId !== HOST_PACKAGE) return
@@ -49,26 +50,40 @@ export function IrisUpdatePrompt() {
         } finally {
           clearTimeout(timeout)
         }
-        if (!isIrisOffer(manifest, setup.offerId, offered.current)) return
+        const completing = installedOffer.current === setup.offerId
+        if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
 
         offered.current = setup.offerId
+        if (!completing) {
+          try {
+            await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
+            const result = await appRegistry.installFromJsonUrl(sourceUrl)
+            if (result.is_error()) throw result.error
+            await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
+            installedOffer.current = setup.offerId
+          } catch (error) {
+            offered.current = null
+            await showAlert({
+              title: translate("irisUpdate:failedTitle"),
+              message: error instanceof Error ? error.message : String(error),
+            })
+            return
+          }
+        }
+
         try {
-          await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
-          const result = await appRegistry.installFromJsonUrl(sourceUrl)
-          if (result.is_error()) throw result.error
-          await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
+          await engine.miniapps.refresh()
+          await engine.miniapps.setForeground(IRIS_PACKAGE)
           const acknowledgement = await fetch(`${sourceUrl}/__mentra_release/installed`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({offerId: setup.offerId}),
           })
           if (!acknowledgement.ok) throw new Error(`Iris installation acknowledgement failed (${acknowledgement.status})`)
-          await engine.miniapps.refresh()
-          await engine.miniapps.setForeground(IRIS_PACKAGE)
+          installedOffer.current = null
         } catch (error) {
-          offered.current = null
           await showAlert({
-            title: translate("irisUpdate:failedTitle"),
+            title: translate("irisUpdate:completionFailedTitle"),
             message: error instanceof Error ? error.message : String(error),
           })
         }
