@@ -56,10 +56,12 @@ export function IrisUpdatePrompt() {
         offered.current = setup.offerId
         if (!completing) {
           try {
-            await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
+            const existingProfile = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
             if (result.is_error()) throw result.error
-            await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
+            if (existingProfile == null) {
+              await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
+            }
             installedOffer.current = setup.offerId
           } catch (error) {
             offered.current = null
