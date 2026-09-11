@@ -11,6 +11,8 @@ import {IRIS_PACKAGE, isIrisOffer, parseIrisSetupOffer} from "./irisUpdateOffer"
 const HOST_PACKAGE = "com.mentra.mentra.openalma"
 const DEFAULT_IRIS_SOURCE = "http://10.77.0.1:6789"
 const IRIS_PROFILE_KEY = "openalma.connection-profile"
+const IRIS_PROFILE_CLEARED_KEY = "openalma.connection-profile-cleared"
+const IRIS_INSTALLED_OFFER_KEY = "openalma.installed-offer"
 
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
@@ -50,18 +52,23 @@ export function IrisUpdatePrompt() {
         } finally {
           clearTimeout(timeout)
         }
-        const completing = installedOffer.current === setup.offerId
+        const persistedOffer = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY)
+        const completing = installedOffer.current === setup.offerId || persistedOffer === setup.offerId
         if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
 
         offered.current = setup.offerId
         if (!completing) {
           try {
-            const existingProfile = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
+            const [existingProfile, profileCleared] = await Promise.all([
+              localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY),
+              localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_CLEARED_KEY),
+            ])
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
             if (result.is_error()) throw result.error
-            if (existingProfile == null) {
+            if (existingProfile == null && profileCleared !== "1") {
               await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
             }
+            await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY, setup.offerId)
             installedOffer.current = setup.offerId
           } catch (error) {
             offered.current = null
@@ -82,6 +89,7 @@ export function IrisUpdatePrompt() {
             body: JSON.stringify({offerId: setup.offerId}),
           })
           if (!acknowledgement.ok) throw new Error(`Iris installation acknowledgement failed (${acknowledgement.status})`)
+          await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY, "")
           installedOffer.current = null
         } catch (error) {
           await showAlert({
