@@ -28,6 +28,10 @@
   </a>
 </div>
 
+> ## About this fork (OpenAlma)
+>
+> This is **Team GhostMaker's fork of MentraOS**, pinned to upstream tag `mentra-builds-v3.2.0` on the `openalma/mentra-v3.2.0` branch. It exists to host **Iris**, the OpenAlma MiniApp (`miniapps/openalma/` — its own repository, `mekineer-com/iris`, kept out of this workspace's history), and to carry the private install handoff between the OpenAlma launcher and the phone: launcher-authorized install offers, one-tap private updates and repair, connection-profile seeding and preservation across updates, and install-acknowledgement retry. The manual installer also accepts pasted private release links. Changes are intentionally minimal and not intended for upstream. Everything below is upstream MentraOS.
+
 ## Write Once, Run on Any Smart Glasses
 
 MentraOS is how developers and businesses build smart glasses apps.
