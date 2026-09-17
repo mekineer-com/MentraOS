@@ -30,7 +30,9 @@
 
 > ## About this fork (OpenAlma)
 >
-> This is **Team GhostMaker's fork of MentraOS**, pinned to upstream tag `mentra-builds-v3.2.0` on the `openalma/mentra-v3.2.0` branch. It exists to host **Iris**, the OpenAlma MiniApp (`miniapps/openalma/` — its own repository, `mekineer-com/iris`, kept out of this workspace's history), and to carry the private install handoff between the OpenAlma launcher and the phone: launcher-authorized install offers, one-tap private updates and repair, connection-profile seeding and preservation across updates, and install-acknowledgement retry. The manual installer also accepts pasted private release links. Changes are intentionally minimal and not intended for upstream. Everything below is upstream MentraOS.
+> For normal use, install stock Mentra from the official stores above. This public fork is an optional parallel Android host for an operator-managed [OpenAlma Iris](https://github.com/mekineer-com/iris) deployment. It adds automatic Iris install/update/repair, profile handoff, foreground opening, and exact completion acknowledgement; the stock app remains supported through OpenAlma's manual QR flow.
+>
+> The tradeoff is deliberate: this fork is independently maintained, may lag upstream improvements, does not receive stock Store updates, and currently targets the operator-specific private Iris source at `http://10.77.0.1:6789`. Build it only as the separate `com.mentra.mentra.openalma` application with `MENTRAOS_BUILD_NAME=openalma` or `mobile/scripts/android-release.mjs --name openalma`; without that identity its updater is disabled. Iris remains a separate repository at `miniapps/openalma/` and is absent from this Git history. The handoff depends on Iris's pinned `@mentra/miniapp-cli@0.1.0-dev.1` patch, so revalidate release serving, profile transfer, and acknowledgement before changing that dependency. These minimal changes are based on upstream tag `mentra-builds-v3.2.0` and are not intended for upstream submission. Everything below is upstream MentraOS documentation.
 
 ## Write Once, Run on Any Smart Glasses
 

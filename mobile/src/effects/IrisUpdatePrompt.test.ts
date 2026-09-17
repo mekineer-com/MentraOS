@@ -8,7 +8,10 @@ import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
 import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
 import {isIrisOffer, parseIrisSetupOffer} from "./irisUpdateOffer"
 
-jest.mock("expo-application", () => ({applicationId: "com.mentra.mentra.openalma"}))
+jest.mock("expo-application", () => ({
+  applicationId: "com.mentra.mentra.openalma",
+  nativeApplicationVersion: "3.2.0",
+}))
 jest.mock("@/contexts/ModalContext", () => ({showAlert: jest.fn()}))
 jest.mock("@/i18n", () => ({translate: (key: string) => key}))
 jest.mock("@mentra/engine", () => ({
@@ -58,6 +61,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     if (url.endsWith("/openalma-profile.json")) {
       return {ok: true, json: async () => ({offerId: "offer-1", profile})}
     }
+    if (url.endsWith("/integration/mentra/host/seen")) return {ok: false, status: 503}
     acknowledgements += 1
     return {ok: acknowledgements > 1, status: 503}
   }) as unknown as typeof fetch
@@ -71,6 +75,21 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   await waitFor(() => expect(acknowledgements).toBe(2))
 
   expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
+  expect(global.fetch).toHaveBeenCalledWith(
+    "http://10.77.0.1/integration/mentra/host/seen",
+    expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({Authorization: "Bearer fictional"}),
+      body: JSON.stringify({
+        user_id: "Test User",
+        device_session_id: "test-phone",
+        host_package: "com.mentra.mentra.openalma",
+        host_version: "3.2.0",
+        protocol_version: 1,
+        capabilities: ["automatic_iris_install", "iris_profile_handoff", "iris_install_ack"],
+      }),
+    }),
+  )
   expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledWith(
     "com.openalma.mentra", "openalma.connection-profile", JSON.stringify(profile),
   )
@@ -99,6 +118,7 @@ test("preserves a connection profile changed inside Iris", async () => {
     if (url.endsWith("/openalma-profile.json")) {
       return {ok: true, json: async () => ({offerId: "offer-2", profile})}
     }
+    if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     return {ok: true}
   }) as unknown as typeof fetch
 
@@ -131,6 +151,7 @@ test("does not restore a profile explicitly cleared inside Iris", async () => {
   global.fetch = jest.fn(async (url: string) => {
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-profile.json")) return {ok: true, json: async () => ({offerId: "offer-3", profile})}
+    if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     return {ok: true}
   }) as unknown as typeof fetch
 
@@ -157,6 +178,7 @@ test("resumes acknowledgement from a persisted installed offer without reinstall
   global.fetch = jest.fn(async (url: string) => {
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-profile.json")) return {ok: true, json: async () => ({offerId: "offer-4", profile})}
+    if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     return {ok: true}
   }) as unknown as typeof fetch
 

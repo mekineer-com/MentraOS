@@ -14,6 +14,29 @@ const IRIS_PROFILE_KEY = "openalma.connection-profile"
 const IRIS_PROFILE_CLEARED_KEY = "openalma.connection-profile-cleared"
 const IRIS_INSTALLED_OFFER_KEY = "openalma.installed-offer"
 
+function announceHost(profile: {
+  baseUrl: string
+  bearer: string
+  userId: string
+  deviceSessionId: string
+}) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 2000)
+  void fetch(`${profile.baseUrl.replace(/\/+$/, "")}/integration/mentra/host/seen`, {
+    method: "POST",
+    signal: controller.signal,
+    headers: {Authorization: `Bearer ${profile.bearer}`, "Content-Type": "application/json"},
+    body: JSON.stringify({
+      user_id: profile.userId,
+      device_session_id: profile.deviceSessionId,
+      host_package: HOST_PACKAGE,
+      host_version: Application.nativeApplicationVersion || "unknown",
+      protocol_version: 1,
+      capabilities: ["automatic_iris_install", "iris_profile_handoff", "iris_install_ack"],
+    }),
+  }).catch(() => undefined).finally(() => clearTimeout(timeout))
+}
+
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
   const offered = useRef<string | null>(null)
@@ -58,6 +81,7 @@ export function IrisUpdatePrompt() {
 
         offered.current = setup.offerId
         if (!completing) {
+          announceHost(setup.profile)
           try {
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
             if (result.is_error()) throw result.error
