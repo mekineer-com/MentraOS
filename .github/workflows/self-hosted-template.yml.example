@@ -1,0 +1,59 @@
+name: Self-Hosted Runner Template
+
+# This is a template showing best practices for self-hosted runners
+
+on:
+  workflow_dispatch:
+
+jobs:
+  example-job:
+    runs-on: self-hosted
+    
+    # Optional: Clean workspace before starting
+    # This ensures no leftover files from previous runs
+    defaults:
+      run:
+        shell: bash
+    
+    steps:
+      - name: Clean workspace
+        run: |
+          # Remove everything except hidden files (like .git)
+          shopt -s extglob
+          rm -rf !(.git|.|..)
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Clean checkout to avoid merge conflicts
+          clean: true
+          
+      # For Node.js projects with bun
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js (if needed)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies with bun
+        run: bun install --no-frozen-lockfile
+
+      # For Android builds
+      - name: Setup Java (if needed)
+        uses: actions/setup-java@v3
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      # Clean up after job
+      - name: Post-job cleanup
+        if: always()
+        run: |
+          # Clean up large directories to save space
+          rm -rf node_modules
+          rm -rf android/build android/.gradle
+          # Add more cleanup as needed

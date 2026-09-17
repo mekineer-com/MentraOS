@@ -1,0 +1,318 @@
+import {Platform, Pressable, TouchableOpacity, View} from "react-native"
+import {SharedValue, useSharedValue, withSpring} from "react-native-reanimated"
+import {Gesture, GestureDetector} from "react-native-gesture-handler"
+
+import {Icon, Text} from "@/components/ignite"
+import AppIcon from "@/components/home/AppIcon"
+import {useAppTheme} from "@/contexts/ThemeContext"
+import {translate} from "@/i18n"
+import {sortAppsByLastOpenTime, useActiveBackgroundApps, useActiveForegroundApp, type ClientApp} from "@mentra/engine"
+import {RefObject, useEffect, useRef, useState} from "react"
+import {scheduleOnRN} from "react-native-worklets"
+import {BlurView} from "expo-blur"
+import {LinearGradient} from "expo-linear-gradient"
+import MaskedView from "@react-native-masked-view/masked-view"
+import {useSaferAreaInsets} from "@/contexts/SaferAreaContext"
+import GlassView from "@/components/ui/GlassView"
+import {OPEN_SPRING, SWIPE_DISTANCE_THRESHOLD, SWIPE_PERCENT_THRESHOLD} from "@/stores/appSwitcher"
+import {SETTINGS, useSetting} from "@mentra/engine"
+import {hapticBuzz} from "@/utils/utils"
+import showAlert from "@/contexts/ModalContext"
+
+interface AppSwitcherButtonProps {
+  swipeProgress: SharedValue<number>
+  onGridButtonPress: () => void
+  blurTargetRef: RefObject<View | null>
+}
+
+const SWIPE_DISTANCE_MULTIPLIER = 1
+// const SWIPE_VELOCITY_THRESHOLD = 800 // Velocity threshold for quick swipes
+
+export default function AppSwitcherButton({swipeProgress, onGridButtonPress, blurTargetRef}: AppSwitcherButtonProps) {
+  const {theme} = useAppTheme()
+  const backgroundApps = useActiveBackgroundApps()
+  const foregroundApp = useActiveForegroundApp()
+  // Once the Compositor starts opening a standard app, keep it out of the
+  // home tray underneath the sliding surface. It enters the tray when the app
+  // is minimized (foregrounded=false), which avoids the icon/count visibly
+  // popping in before the opening animation has covered Home.
+  const trayForegroundApp = foregroundApp?.foregrounded ? null : foregroundApp
+  const appsCount = backgroundApps.length + (trayForegroundApp ? 1 : 0)
+  const hasBuzzedRef = useRef(false)
+  const [appsList, setAppsList] = useState<ClientApp[]>([])
+  const insets = useSaferAreaInsets()
+  const translateY = useSharedValue(0)
+  const [androidBlur] = useSetting(SETTINGS.android_blur.key)
+
+  useEffect(() => {
+    let cancelled = false
+    const list = trayForegroundApp ? [...backgroundApps, trayForegroundApp] : [...backgroundApps]
+    sortAppsByLastOpenTime(list).then((sorted) => {
+      if (!cancelled) setAppsList(sorted)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [backgroundApps, trayForegroundApp])
+
+  const panGesture = Gesture.Pan()
+    .activeOffsetY([-10, 10])
+    .onUpdate((event) => {
+      // Only track upward swipes (negative Y)
+      if (event.translationY < 0) {
+        translateY.value = event.translationY
+        let swipeValue = Math.min(
+          1,
+          Math.abs(translateY.value) / (SWIPE_DISTANCE_THRESHOLD * SWIPE_DISTANCE_MULTIPLIER),
+        )
+
+        // don't allow the swipe progress to be 1, until we have ended the swipe gesture:
+        if (swipeValue > 0.9) {
+          swipeProgress.value = 0.9
+        } else {
+          swipeProgress.value = swipeValue
+        }
+
+        const swipeDistance = Math.abs(translateY.value)
+
+        const shouldOpen = swipeProgress.value > SWIPE_PERCENT_THRESHOLD || swipeDistance > SWIPE_DISTANCE_THRESHOLD
+
+        if (shouldOpen && !hasBuzzedRef.current) {
+          hasBuzzedRef.current = true
+          scheduleOnRN(hapticBuzz)
+        }
+      }
+    })
+    .onEnd((_event) => {
+      const swipeDistance = Math.abs(translateY.value)
+      // const normalizedVelocity = event.velocityY / (SWIPE_DISTANCE_THRESHOLD * SWIPE_DISTANCE_MULTIPLIER)
+      // const velocity = event.velocityY / 100
+
+      const shouldOpen = swipeProgress.value > SWIPE_PERCENT_THRESHOLD || swipeDistance > SWIPE_DISTANCE_THRESHOLD
+
+      if (shouldOpen) {
+        swipeProgress.value = withSpring(1, OPEN_SPRING)
+      } else {
+        swipeProgress.value = withSpring(0, {
+          damping: 20,
+          stiffness: 500,
+          overshootClamping: true,
+          // velocity: velocity,
+        })
+      }
+      hasBuzzedRef.current = false
+
+      translateY.value = 0
+    })
+
+  const tapGesture = Gesture.Tap().onEnd(() => {
+    swipeProgress.value = withSpring(1, {damping: 20, stiffness: 1000, overshootClamping: true})
+  })
+
+  // let composedGesture
+  // if (Platform.OS === "android") {
+  //   composedGesture = Gesture.Exclusive(tapGesture)
+  // } else {
+  //   composedGesture = Gesture.Exclusive(panGesture, tapGesture)
+  // }
+
+  let composedGesture = Gesture.Exclusive(panGesture, tapGesture)
+
+  // const bottomPadding = insets.bottom + theme.spacing.s4
+  let bottomPadding = insets.bottom
+  if (Platform.OS === "android") {
+    bottomPadding += theme.spacing.s6
+  }
+  // const bottomPadding = theme.spacing.s6
+  // const bottomPadding = 0
+
+  const renderBackground = () => {
+    // return (
+    //   <BlurView intensity={50} className="absolute inset-0" blurTarget={blurTargetRef} blurMethod="dimezisBlurViewSdk31Plus" />
+    // )
+
+    const linGradientOnly = Platform.OS === "android" && !androidBlur
+
+    return (
+      //       {/* <BlurView intensity={20} className="absolute inset-0" /> */}
+      // {/* <LinearGradient
+      //   colors={[theme.colors.background, bgAlpha, bgAlpha]}
+      //   locations={[0.2, 1, 1]}
+      //   start={{x: 0, y: 1}}
+      //   end={{x: 0, y: 0}}
+      //   style={{
+      //     position: "absolute",
+      //     left: 0,
+      //     right: 0,
+      //     top: 0,
+      //     bottom: 0,
+      //   }}
+      //   pointerEvents="none"
+      // /> */}
+      <MaskedView
+        style={{position: "absolute", left: 0, right: 0, top: 0, bottom: 0, pointerEvents: "none"}}
+        maskElement={
+          <LinearGradient
+            colors={["black", "transparent"]}
+            locations={[0.4, 1]}
+            start={{x: 0, y: 1}}
+            end={{x: 0, y: 0}}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: 0,
+            }}
+            pointerEvents="none"
+          />
+        }>
+        {Platform.OS === "android" && androidBlur && (
+          <BlurView
+            intensity={20}
+            className="absolute inset-0"
+            blurTarget={blurTargetRef}
+            blurMethod="dimezisBlurViewSdk31Plus"
+          />
+        )}
+
+        {linGradientOnly && <View className="flex-1 h-full bg-background" />}
+
+        {Platform.OS === "ios" && (
+          <BlurView intensity={70} className="absolute inset-0" blurMethod="dimezisBlurViewSdk31Plus" />
+        )}
+        {/* <View className="flex-1 h-full bg-[#324376]" />
+        <View className="flex-1 h-full bg-[#F5DD90]" />
+        <View className="flex-1 h-full bg-[#F76C5E]" />
+        <View className="flex-1 h-full bg-[#e1e1e1]" /> */}
+      </MaskedView>
+    )
+  }
+
+  const handleNoAppsPress = () => {
+    showAlert({
+      title: translate("appSwitcher:noAppsOpen"),
+      message: translate("appSwitcher:yourRecentlyUsedAppsWillAppearHere"),
+      buttons: [{text: translate("common:ok")}],
+    })
+  }
+
+  let paddingTop: number = Platform.OS === "android" ? 0 : theme.spacing.s16
+
+  // Make the home action buttons (the running-apps pill + the grid button) read
+  // as ~20pp less transparent than the default glass — Android only. iOS keeps
+  // its native liquid glass untouched. Alpha F2 ≈ 95% opaque (default is C9 ≈ 79%).
+  const buttonTint = Platform.OS === "android" ? theme.colors.primary_foreground + "F2" : undefined
+
+  const renderGridButton = () => {
+    return (
+      <GlassView className={`h-16 rounded-2xl`} tintColor={buttonTint} style={{marginBottom: bottomPadding}}>
+        <TouchableOpacity onPress={onGridButtonPress} className="items-center justify-center w-16 h-16">
+          <Icon name="grid" color={theme.colors.foreground} size={26} />
+        </TouchableOpacity>
+      </GlassView>
+    )
+  }
+
+  if (Platform.OS === "android" && appsCount === 0) {
+    return (
+      <View
+        className="w-screen flex-row justify-between items-center gap-4 bottom-0 -ml-6 px-6 absolute"
+        style={{paddingTop: paddingTop}}>
+        {renderBackground()}
+        <TouchableOpacity onPress={handleNoAppsPress} className="flex-1">
+          <View className="flex-1" style={{paddingBottom: bottomPadding}}>
+            <GlassView
+              tintColor={buttonTint}
+              className={`flex-1 py-1.5 pl-3 h-16 rounded-2xl flex-row justify-between items-center`}>
+              <View className="flex-row items-center justify-center flex-1">
+                <Text className="text-muted-foreground text-md" tx="home:appletPlaceholder2" />
+              </View>
+            </GlassView>
+          </View>
+        </TouchableOpacity>
+        {renderGridButton()}
+      </View>
+    )
+  }
+
+  if (appsCount === 0) {
+    return (
+      <View
+        className="w-screen flex-row justify-between items-center gap-4 bottom-0 -ml-6 px-6 absolute"
+        style={{paddingTop: paddingTop}}>
+        {renderBackground()}
+        <GestureDetector gesture={composedGesture}>
+          <View className="flex-1" style={{paddingBottom: bottomPadding}}>
+            <GlassView
+              tintColor={buttonTint}
+              className={`flex-1 py-1.5 pl-3 min-h-16 rounded-2xl flex-row justify-between items-center`}>
+              <View className="flex-row items-center justify-center flex-1">
+                <Text className="text-muted-foreground text-md" tx="home:appletPlaceholder2" />
+              </View>
+            </GlassView>
+          </View>
+        </GestureDetector>
+        {renderGridButton()}
+      </View>
+    )
+  }
+
+  // base 16 height
+  return (
+    <View
+      className="w-screen flex-row justify-between items-center gap-4 bottom-0 -ml-6 px-6 absolute"
+      style={{paddingTop: paddingTop}}>
+      {renderBackground()}
+      <GestureDetector gesture={composedGesture}>
+        <View className="flex-1" style={{paddingBottom: bottomPadding}}>
+          <GlassView
+            tintColor={buttonTint}
+            className={`flex-1 pl-5 pr-1.5 rounded-2xl flex-row justify-between items-center min-h-16`}>
+            <Pressable style={({pressed}) => [{opacity: pressed ? 0.7 : 1}]} className="flex-1 flex-row">
+              <View className="flex-row flex-1">
+                <View className="flex-col gap-1 flex-1 justify-center">
+                  <Text
+                    text={translate("home:running").toUpperCase()}
+                    className="font-semibold text-secondary-foreground text-sm"
+                  />
+                  {/* {appsCount > 0 && <Badge text={`${translate("home:appsCount", {count: appsCount})}`} />} */}
+                  {appsCount > 0 && (
+                    <Text
+                      text={translate("home:appsCount", {count: appsCount})}
+                      className="text-secondary-foreground text-xs"
+                    />
+                  )}
+                </View>
+
+                <View className="flex-row">
+                  {appsList.slice(0, 9).map((app, index) => {
+                    let marginLeft = 0
+                    let trueIndex = appsList.length - index
+                    let boxShadow = "-11.428px 0px 11.428px rgba(73, 73, 73, 0.16)"
+                    if (index > 0) {
+                      marginLeft = -(theme.spacing.s12 - theme.spacing.s5)
+                    }
+                    if (trueIndex > 6) {
+                      marginLeft = -(theme.spacing.s12 - theme.spacing.s1)
+                      boxShadow = ""
+                    }
+                    if (index === 0) {
+                      boxShadow = ""
+                    }
+                    return (
+                      <View key={app.packageName} style={{zIndex: index, marginLeft: marginLeft}}>
+                        <AppIcon app={app} className="w-12 h-12 rounded-lg" style={{boxShadow: boxShadow}} />
+                      </View>
+                    )
+                  })}
+                </View>
+              </View>
+            </Pressable>
+          </GlassView>
+        </View>
+      </GestureDetector>
+      {renderGridButton()}
+    </View>
+  )
+}

@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "allowJs": false,
+    "allowSyntheticDefaultImports": true,
+    "experimentalDecorators": true,
+    "jsx": "react-native",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "sourceMap": true,
+    "target": "esnext",
+    "lib": ["esnext", "dom"],
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "assets/*": ["./assets/*"],
+      "@assets/*": ["./assets/*"],
+      "@plugins/*": ["./plugins/*"],
+      "@mentra/bluetooth-sdk-internal": ["./modules/bluetooth-sdk/src/_internal"],
+      "@mentra/cloud-client": ["../cloud-v2/packages/cloud-client/src/index.ts"],
+      "@mentra/cloud-client/react-native": ["../cloud-v2/packages/cloud-client/react-native/index.ts"],
+      "@mentra/cloud-runtime/protocol": ["../cloud-v2/packages/runtime/src/protocol/index.ts"],
+      "@mentra/engine": ["./modules/engine/src/index.ts"],
+      "@mentra/engine/*": ["./modules/engine/src/*"],
+      "@mentra/engine-host-internal": ["./modules/engine-host-internal/src/index.ts"],
+      "@mentra/engine-host-internal/*": ["./modules/engine-host-internal/src/*"]
+    },
+    "types": ["node", "react", "jest", "bun-types"]
+  },
+  "extends": "expo/tsconfig.base",
+  "ts-node": {
+    "compilerOptions": {
+      "module": "commonjs"
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "exclude": [
+    "node_modules",
+    "test/**/*",
+    "e2e-tests/ui/**/*",
+    "modules/*/src/**/*.test.ts",
+    "modules/*/src/**/__tests__/**/*"
+  ]
+}

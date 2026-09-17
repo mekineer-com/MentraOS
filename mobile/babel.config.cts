@@ -1,0 +1,24 @@
+/** @type {import('@babel/core').TransformOptions} */
+module.exports = function (api: any) {
+  api.cache(true)
+  return {
+    presets: ["babel-preset-expo"],
+    plugins: [
+      [
+        "module-resolver",
+        {
+          root: ["./"],
+          alias: {
+            "@": "./src",
+            // "assets": "./assets",
+            "@plugins": "./plugins",
+            "@assets": "./assets",
+            "@mentra/bluetooth-sdk-internal": "./modules/bluetooth-sdk/src/_internal",
+          },
+          extensions: [".ios.js", ".android.js", ".js", ".ts", ".tsx", ".json"],
+        },
+      ],
+      "react-native-reanimated/plugin",
+    ],
+  }
+}

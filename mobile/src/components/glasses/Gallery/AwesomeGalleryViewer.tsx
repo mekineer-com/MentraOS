@@ -1,0 +1,746 @@
+/**
+ * AwesomeGalleryViewer - Unified gallery for images and videos
+ * Uses react-native-awesome-gallery for buttery-smooth 60fps swiping
+ */
+
+import Slider from "@react-native-community/slider"
+import BottomSheet from "@gorhom/bottom-sheet"
+import {Image} from "expo-image"
+import {useState, useRef, useEffect, useCallback, useMemo, memo, type ElementRef} from "react"
+// eslint-disable-next-line no-restricted-imports
+import {View, TouchableOpacity, Modal, StatusBar, Text, useWindowDimensions} from "react-native"
+import Gallery, {GalleryRef} from "react-native-awesome-gallery"
+import {GestureHandlerRootView} from "react-native-gesture-handler"
+import {useSaferAreaInsets} from "@/contexts/SaferAreaContext"
+import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons"
+import Video from "react-native-video"
+
+import {Icon} from "@/components/ignite/Icon"
+import {useAppTheme} from "@/contexts/ThemeContext"
+import {ThemedStyle} from "@/theme"
+import {PhotoInfo} from "@/types/asg"
+
+import {MediaMetadataSheet} from "./MediaMetadataSheet"
+import {MediaDimensions} from "./mediaMetadata"
+
+// Screen dimensions are now obtained via useWindowDimensions() hook for rotation support
+
+interface AwesomeGalleryViewerProps {
+  visible: boolean
+  photos: PhotoInfo[]
+  initialIndex: number
+  onClose: () => void
+  onShare?: (photo: PhotoInfo) => void
+}
+
+interface VideoPlayerItemProps {
+  photo: PhotoInfo
+  isActive: boolean
+  onSeekingChange?: (seeking: boolean) => void
+  onDimensions: (dimensions: MediaDimensions) => void
+}
+
+interface ImageItemProps {
+  photo: PhotoInfo
+  setImageDimensions: (dimensions: {width: number; height: number}) => void
+  isActive: boolean // Whether this is the currently visible image
+  onDimensions: (dimensions: MediaDimensions) => void
+}
+
+/**
+ * Video player component for gallery items
+ */
+const VideoPlayerItem = memo(function VideoPlayerItem({
+  photo,
+  isActive,
+  onSeekingChange,
+  onDimensions,
+}: VideoPlayerItemProps) {
+  const {theme, themed} = useAppTheme()
+  const {width: screenWidth, height: screenHeight} = useWindowDimensions()
+  const videoRef = useRef<ElementRef<typeof Video>>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [showControls, setShowControls] = useState(true)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [isSeeking, setIsSeeking] = useState(false)
+  const [hasError, setHasError] = useState(false)
+  const [errorMessage, setErrorMessage] = useState("")
+  const [isBuffering, setIsBuffering] = useState(true)
+  const [showThumbnail, setShowThumbnail] = useState(true)
+  const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3)
+  const wasInactiveRef = useRef(false)
+  const userPausedRef = useRef(false) // Track if user manually paused
+
+  // Auto-play when this video becomes active, restart from beginning if returning
+  useEffect(() => {
+    if (isActive) {
+      console.log("🎥 [VideoPlayerItem] Video became active:", photo.name)
+
+      // If video was previously inactive (user swiped away and came back), restart from beginning
+      if (wasInactiveRef.current) {
+        console.log("🎥 [VideoPlayerItem] Returning to video - restarting from beginning")
+        videoRef.current?.seek(0)
+        setCurrentTime(0)
+        userPausedRef.current = false // Reset user pause flag when returning
+        setIsPlaying(true)
+        setShowControls(true)
+        wasInactiveRef.current = false
+      } else if (!userPausedRef.current) {
+        // Only auto-play if user hasn't manually paused
+        // First time activation - auto-play unless video is at the end
+        if (!(duration > 0 && currentTime >= duration - 0.5)) {
+          console.log("🎥 [VideoPlayerItem] Starting playback (video not finished)")
+          setIsPlaying(true)
+        } else {
+          console.log("🎥 [VideoPlayerItem] Video already finished, not auto-playing")
+          setShowControls(true)
+        }
+      } else {
+        console.log("🎥 [VideoPlayerItem] User paused - respecting pause state")
+      }
+    } else {
+      console.log("🎥 [VideoPlayerItem] Video became inactive, pausing:", photo.name)
+      setIsPlaying(false)
+      userPausedRef.current = false // Reset user pause when leaving
+      wasInactiveRef.current = true // Mark that this video was deactivated
+    }
+  }, [isActive, photo.name, duration, currentTime])
+
+  // Hide controls after 3 seconds
+  useEffect(() => {
+    if (showControls && isPlaying && isActive) {
+      const timer = setTimeout(() => setShowControls(false), 3000)
+      return () => clearTimeout(timer)
+    }
+    return undefined
+  }, [showControls, isPlaying, isActive])
+
+  const videoUrl = photo.download || photo.url
+
+  // Use thumbnail for poster to show something while loading
+  const posterUrl = photo.thumbnailPath
+    ? photo.thumbnailPath
+    : photo.thumbnail_data
+      ? photo.thumbnail_data.startsWith("data:")
+        ? photo.thumbnail_data
+        : `data:image/jpeg;base64,${photo.thumbnail_data}`
+      : undefined
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, "0")}`
+  }
+
+  return (
+    <View
+      testID="video-player-container"
+      style={{
+        flex: 1,
+        width: screenWidth,
+        height: screenHeight,
+        backgroundColor: theme.colors.background,
+        justifyContent: "center",
+        alignItems: "center",
+        paddingTop: screenHeight * 0.05,
+      }}>
+      <Video
+        ref={videoRef}
+        source={{uri: videoUrl}}
+        poster={posterUrl}
+        posterResizeMode="contain"
+        style={{width: "100%", aspectRatio: videoAspectRatio, backgroundColor: theme.colors.background}}
+        resizeMode="contain"
+        paused={!isPlaying}
+        controls={false}
+        repeat={false}
+        playInBackground={false}
+        playWhenInactive={false}
+        ignoreSilentSwitch="ignore"
+        progressUpdateInterval={250}
+        bufferConfig={{
+          minBufferMs: 1500,
+          maxBufferMs: 5000,
+          bufferForPlaybackMs: 500,
+          bufferForPlaybackAfterRebufferMs: 1000,
+        }}
+        onProgress={({currentTime: time}) => {
+          if (!isSeeking) {
+            setCurrentTime(time)
+          }
+        }}
+        onLoad={({duration: dur, naturalSize}) => {
+          console.log("🎥 [VideoPlayerItem] Video loaded, duration:", dur, "naturalSize:", naturalSize)
+          setDuration(dur)
+          setHasError(false)
+          if (naturalSize?.width && naturalSize?.height && naturalSize.height > 0) {
+            setVideoAspectRatio(naturalSize.width / naturalSize.height)
+            onDimensions({width: naturalSize.width, height: naturalSize.height})
+          }
+        }}
+        onBuffer={({isBuffering: buffering}) => {
+          console.log("🎥 [VideoPlayerItem] Buffering state:", buffering)
+          setIsBuffering(buffering)
+        }}
+        onReadyForDisplay={() => {
+          console.log("🎥 [VideoPlayerItem] Video ready for display, hiding thumbnail:", photo.name)
+          setIsBuffering(false)
+          setShowThumbnail(false)
+        }}
+        onError={(error) => {
+          console.error("🎥 [VideoPlayerItem] Video error:", error)
+          const inner = (error as {error?: {code?: number; domain?: string; errorString?: string}})?.error
+          const code = inner?.code
+          const errorStr = String(inner?.errorString || inner?.code || "Unknown error")
+          const isCorrupted = errorStr.includes("UNSUPPORTED") || errorStr.includes("PARSING") || code === -11829
+          setHasError(true)
+          setErrorMessage(isCorrupted ? "Video file corrupted or unsupported format" : "Failed to play video")
+          setIsPlaying(false)
+          setIsBuffering(false)
+        }}
+        onEnd={() => {
+          console.log("🎥 [VideoPlayerItem] Video playback ended:", photo.name)
+          setIsPlaying(false)
+          setShowControls(true)
+          // Keep video at end position (don't auto-restart)
+        }}
+        onSeek={() => setIsSeeking(false)}
+      />
+
+      {/* Buffering indicator */}
+      {isBuffering && !hasError && (
+        <View style={themed($bufferingOverlay)} pointerEvents="none">
+          <View style={themed($bufferingSpinner)}>
+            <Text style={themed($bufferingText)}>Loading...</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Tap area to toggle controls */}
+      <TouchableOpacity
+        activeOpacity={1}
+        style={{position: "absolute", top: 0, left: 0, bottom: screenHeight * 0.15, right: 0, zIndex: 1}}
+        onPress={() => {
+          console.log("🎮 [TapArea] Toggling controls, current state:", showControls)
+          setShowControls(!showControls)
+        }}
+      />
+
+      {/* Thumbnail placeholder while video loads - instant display */}
+      {showThumbnail && posterUrl && !hasError && (
+        <View testID="video-thumbnail-overlay" style={themed($thumbnailOverlay)} pointerEvents="none">
+          <Image
+            source={{uri: posterUrl}}
+            style={{width: "100%", aspectRatio: videoAspectRatio}}
+            contentFit="contain"
+          />
+        </View>
+      )}
+
+      {/* Error Message Overlay */}
+      {hasError && (
+        <View style={themed($errorContainer)} pointerEvents="none">
+          <View style={themed($errorBadge)}>
+            <MaterialCommunityIcons name="alert-circle" size={60} color="#FF6B6B" />
+            <Text style={themed($errorTitle)}>Playback Error</Text>
+            <Text style={themed($errorMessage)}>{errorMessage}</Text>
+            <Text style={themed($errorSubtext)}>This video may be corrupted or in an unsupported format.</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Unified video controls - elegant bottom bar */}
+      {showControls && !hasError && (
+        <View
+          style={{
+            position: "absolute",
+            bottom: screenHeight * 0.1,
+            left: 0,
+            right: 0,
+            paddingHorizontal: 24,
+            zIndex: 100,
+          }}
+          pointerEvents="auto">
+          <TouchableOpacity
+            style={themed($controlBarWrapper)}
+            activeOpacity={1}
+            onPress={() => {
+              // Intercept taps on control bar area to prevent tap area from toggling controls
+              console.log("🎮 [ControlBarWrapper] Tap intercepted, preventing toggle")
+            }}>
+            <View style={themed($unifiedControlBar)}>
+              {/* Play/Pause button on left */}
+              <TouchableOpacity
+                onPress={() => {
+                  console.log("🎮 [VideoControls] Play/Pause button pressed, current state:", isPlaying)
+                  if (!isPlaying && duration > 0 && currentTime >= duration - 0.5) {
+                    // Replay from beginning
+                    console.log("🎮 [VideoControls] Replaying video from start")
+                    videoRef.current?.seek(0)
+                    setCurrentTime(0)
+                    userPausedRef.current = false // User is resuming
+                    setIsPlaying(true)
+                  } else {
+                    // Toggle play/pause
+                    const newPlayingState = !isPlaying
+                    console.log("🎮 [VideoControls] Toggling playback to:", newPlayingState)
+                    userPausedRef.current = !newPlayingState // Set pause flag when pausing
+                    setIsPlaying(newPlayingState)
+                    // Keep controls visible when pausing so user can see the state
+                    if (!newPlayingState) {
+                      setShowControls(true)
+                    }
+                  }
+                }}
+                style={themed($playButtonInline)}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                <MaterialCommunityIcons
+                  name={isPlaying ? "pause" : duration > 0 && currentTime >= duration - 0.5 ? "replay" : "play"}
+                  size={28}
+                  color="white"
+                />
+              </TouchableOpacity>
+
+              {/* Time display */}
+              <Text style={themed($timeText)}>{formatTime(currentTime)}</Text>
+
+              {/* Seek slider */}
+              <Slider
+                style={themed($seekBar)}
+                value={currentTime}
+                minimumValue={0}
+                maximumValue={duration}
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="rgba(255,255,255,0.3)"
+                thumbTintColor="#FFFFFF"
+                onSlidingStart={() => {
+                  setIsSeeking(true)
+                  onSeekingChange?.(true)
+                }}
+                onSlidingComplete={(value) => {
+                  videoRef.current?.seek(value)
+                  onSeekingChange?.(false)
+                }}
+              />
+
+              {/* Duration display */}
+              <Text style={themed($timeText)}>{formatTime(duration)}</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  )
+})
+
+/**
+ * Image component for gallery items
+ */
+const ImageItem = memo(function ImageItem({photo, setImageDimensions, isActive, onDimensions}: ImageItemProps) {
+  const {width: screenWidth, height: screenHeight} = useWindowDimensions()
+  const hasReportedDimensions = useRef(false)
+
+  const imageUri = photo.filePath
+    ? photo.filePath.startsWith("file://")
+      ? photo.filePath
+      : `file://${photo.filePath}`
+    : photo.url
+
+  // Memoize styles to prevent expo-image from restarting loads on iOS
+  const imageStyle = useMemo(() => ({width: screenWidth, height: screenHeight}), [screenWidth, screenHeight])
+
+  return (
+    <View
+      style={{
+        width: screenWidth,
+        height: screenHeight,
+        justifyContent: "center",
+        alignItems: "center",
+        paddingTop: screenHeight * 0.05,
+      }}>
+      <Image
+        source={{uri: imageUri}}
+        style={imageStyle}
+        contentFit="contain"
+        priority={isActive ? "high" : "normal"}
+        cachePolicy="memory-disk"
+        transition={0}
+        allowDownscaling
+        onLoad={(e) => {
+          // Report dimensions back to Gallery for proper scaling - only once
+          if (e.source?.width && e.source?.height && !hasReportedDimensions.current) {
+            hasReportedDimensions.current = true
+            setImageDimensions({
+              width: e.source.width,
+              height: e.source.height,
+            })
+            onDimensions({width: e.source.width, height: e.source.height})
+          }
+        }}
+      />
+    </View>
+  )
+})
+
+/**
+ * Custom overlay with header, counter, and controls
+ */
+interface CustomOverlayProps {
+  onClose: () => void
+  currentIndex: number
+  total: number
+  onDetails: () => void
+  onShare?: () => void
+}
+
+export function CustomOverlay({onClose, currentIndex, total, onDetails, onShare}: CustomOverlayProps) {
+  const insets = useSaferAreaInsets()
+  const {theme, themed} = useAppTheme()
+
+  return (
+    <View style={[themed($header), {paddingTop: insets.top}]}>
+      <TouchableOpacity
+        accessibilityLabel="Close media viewer"
+        accessibilityRole="button"
+        onPress={onClose}
+        style={themed($actionButton)}>
+        <Icon name="chevron-left" size={28} color={theme.colors.foreground} />
+      </TouchableOpacity>
+      <Text pointerEvents="none" style={themed($counterText)}>
+        {currentIndex + 1} / {total}
+      </Text>
+      <View style={themed($headerActions)}>
+        <TouchableOpacity
+          accessibilityLabel="Show media details"
+          accessibilityRole="button"
+          onPress={onDetails}
+          style={themed($actionButton)}>
+          <Icon name="info" size={24} color={theme.colors.foreground} />
+        </TouchableOpacity>
+        {onShare && (
+          <TouchableOpacity
+            accessibilityLabel="Share media"
+            accessibilityRole="button"
+            onPress={onShare}
+            style={themed($actionButton)}>
+            <MaterialCommunityIcons name="share-variant" size={24} color={theme.colors.foreground} />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  )
+}
+
+/**
+ * Main gallery component using react-native-awesome-gallery
+ */
+export function AwesomeGalleryViewer({visible, photos, initialIndex, onClose, onShare}: AwesomeGalleryViewerProps) {
+  const {themed} = useAppTheme()
+  const [currentIndex, setCurrentIndex] = useState(initialIndex)
+  const [isVideoSeeking, setIsVideoSeeking] = useState(false)
+  const [isMetadataOpen, setIsMetadataOpen] = useState(false)
+  const [mediaDimensions, setMediaDimensions] = useState<Record<string, MediaDimensions>>({})
+  const galleryRef = useRef<GalleryRef>(null)
+  const metadataSheetRef = useRef<BottomSheet>(null)
+
+  // Reset index when modal opens
+  useEffect(() => {
+    if (visible) {
+      setCurrentIndex(initialIndex)
+      setIsMetadataOpen(false)
+      metadataSheetRef.current?.close()
+      // Reset gallery to initial position
+      const resetTimer = setTimeout(() => {
+        galleryRef.current?.setIndex(initialIndex, false)
+      }, 50)
+      return () => clearTimeout(resetTimer)
+    }
+    return undefined
+  }, [visible, initialIndex])
+
+  const recordDimensions = useCallback((name: string, dimensions: MediaDimensions) => {
+    setMediaDimensions((current) => {
+      const existing = current[name]
+      if (existing?.width === dimensions.width && existing.height === dimensions.height) return current
+      return {...current, [name]: dimensions}
+    })
+  }, [])
+
+  // Memoized renderItem to prevent unnecessary re-renders of gallery items
+  // Pass isActive to both videos and images for optimal loading
+  const renderItem = useCallback(
+    ({
+      item,
+      index,
+      setImageDimensions,
+    }: {
+      item: PhotoInfo
+      index: number
+      setImageDimensions: (dims: {width: number; height: number}) => void
+    }) => {
+      const isVideo =
+        item.is_video || item.mime_type?.startsWith("video/") || item.name.match(/\.(mp4|mov|avi|webm|mkv)$/i)
+
+      const isActiveItem = index === currentIndex
+
+      if (isVideo) {
+        return (
+          <VideoPlayerItem
+            photo={item}
+            isActive={isActiveItem}
+            onSeekingChange={setIsVideoSeeking}
+            onDimensions={(dimensions) => recordDimensions(item.name, dimensions)}
+          />
+        )
+      }
+
+      return (
+        <ImageItem
+          photo={item}
+          setImageDimensions={setImageDimensions}
+          isActive={isActiveItem}
+          onDimensions={(dimensions) => recordDimensions(item.name, dimensions)}
+        />
+      )
+    },
+    [currentIndex, recordDimensions],
+  )
+
+  // Memoized keyExtractor
+  const keyExtractor = useCallback((item: PhotoInfo, index: number) => `${item.name}-${index}`, [])
+  const handleIndexChange = useCallback((newIndex: number) => {
+    setCurrentIndex((previousIndex) => (previousIndex === newIndex ? previousIndex : newIndex))
+  }, [])
+  const handleSwipeToClose = useCallback(() => {
+    onClose()
+  }, [onClose])
+  const handleDetails = useCallback(() => {
+    metadataSheetRef.current?.snapToIndex(0)
+  }, [])
+  const handleMetadataChange = useCallback((index: number) => {
+    setIsMetadataOpen(index >= 0)
+  }, [])
+  const handleShare = useCallback(() => {
+    const photo = photos[currentIndex]
+    if (photo) onShare?.(photo)
+  }, [currentIndex, onShare, photos])
+
+  if (!visible || photos.length === 0) {
+    return null
+  }
+
+  return (
+    <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <GestureHandlerRootView testID="media-viewer-gesture-root" style={themed($root)}>
+        <StatusBar hidden />
+        <Gallery
+          ref={galleryRef}
+          data={photos}
+          initialIndex={initialIndex}
+          onIndexChange={handleIndexChange}
+          onSwipeToClose={handleSwipeToClose}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          numToRender={3}
+          emptySpaceWidth={16}
+          maxScale={3}
+          doubleTapScale={2}
+          pinchEnabled
+          swipeEnabled={!isVideoSeeking && !isMetadataOpen}
+          doubleTapEnabled
+          disableVerticalSwipe={isMetadataOpen}
+          disableTransitionOnScaledImage
+          loop={false}
+          style={themed($gallery)}
+        />
+
+        <CustomOverlay
+          onClose={onClose}
+          currentIndex={currentIndex}
+          total={photos.length}
+          onDetails={handleDetails}
+          onShare={onShare ? handleShare : undefined}
+        />
+
+        <MediaMetadataSheet
+          bottomSheetRef={metadataSheetRef}
+          photo={photos[currentIndex]}
+          dimensions={mediaDimensions[photos[currentIndex].name]}
+          onChange={handleMetadataChange}
+        />
+      </GestureHandlerRootView>
+    </Modal>
+  )
+}
+
+// Themed styles
+const $root: ThemedStyle<any> = ({colors}) => ({
+  flex: 1,
+  backgroundColor: colors.background,
+})
+
+const $gallery: ThemedStyle<any> = ({colors}) => ({
+  backgroundColor: colors.background,
+})
+
+const $header: ThemedStyle<any> = ({colors, spacing}) => ({
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  paddingHorizontal: spacing.s4,
+  paddingBottom: spacing.s3,
+  backgroundColor: colors.background,
+  borderBottomWidth: 1,
+  borderBottomColor: colors.border,
+  zIndex: 100,
+})
+
+const $actionButton: ThemedStyle<any> = ({spacing}) => ({
+  padding: spacing.s3,
+  minWidth: 44,
+  minHeight: 44,
+  alignItems: "center",
+  justifyContent: "center",
+})
+
+const $headerActions: ThemedStyle<any> = () => ({
+  flexDirection: "row",
+  alignItems: "center",
+})
+
+const $counterText: ThemedStyle<any> = ({colors, spacing}) => ({
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: spacing.s6,
+  color: colors.foreground,
+  fontSize: 16,
+  fontWeight: "600",
+  textAlign: "center",
+})
+
+// Video player styles (dynamic dimensions now inlined via useWindowDimensions)
+
+const $errorContainer: ThemedStyle<any> = () => ({
+  position: "absolute",
+  top: 0,
+  left: 0,
+  bottom: 0,
+  right: 0,
+  backgroundColor: "rgba(0,0,0,0.85)",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 50,
+})
+
+const $errorBadge: ThemedStyle<any> = ({spacing}) => ({
+  backgroundColor: "rgba(30,30,30,0.95)",
+  borderRadius: 16,
+  padding: spacing.s8,
+  alignItems: "center",
+  maxWidth: "80%",
+  borderWidth: 2,
+  borderColor: "rgba(255,107,107,0.3)",
+})
+
+const $errorTitle: ThemedStyle<any> = ({spacing}) => ({
+  fontSize: 20,
+  fontWeight: "bold",
+  color: "#FF6B6B",
+  marginTop: spacing.s4,
+  marginBottom: spacing.s2,
+})
+
+const $errorMessage: ThemedStyle<any> = ({spacing}) => ({
+  fontSize: 16,
+  color: "white",
+  textAlign: "center",
+  marginBottom: spacing.s3,
+})
+
+const $errorSubtext: ThemedStyle<any> = () => ({
+  fontSize: 13,
+  color: "rgba(255,255,255,0.6)",
+  textAlign: "center",
+  lineHeight: 18,
+})
+
+const $controlBarWrapper: ThemedStyle<any> = () => ({
+  width: "100%",
+})
+
+const $unifiedControlBar: ThemedStyle<any> = ({spacing}) => ({
+  flexDirection: "row",
+  alignItems: "center",
+  backgroundColor: "rgba(0,0,0,0.85)",
+  borderRadius: 16,
+  paddingVertical: spacing.s3,
+  paddingHorizontal: spacing.s4,
+  gap: spacing.s3,
+})
+
+const $playButtonInline: ThemedStyle<any> = () => ({
+  width: 40,
+  height: 40,
+  justifyContent: "center",
+  alignItems: "center",
+  borderRadius: 20,
+  backgroundColor: "rgba(255,255,255,0.15)",
+})
+
+const $seekBar: ThemedStyle<any> = () => ({
+  flex: 1,
+  height: 50,
+})
+
+const $timeText: ThemedStyle<any> = () => ({
+  color: "white",
+  fontSize: 13,
+  fontWeight: "500",
+  minWidth: 45,
+  textAlign: "center",
+})
+
+// Image item styles (dynamic dimensions now inlined via useWindowDimensions)
+
+const $thumbnailOverlay: ThemedStyle<any> = ({colors}) => ({
+  position: "absolute",
+  top: 0,
+  left: 0,
+  bottom: 0,
+  right: 0,
+  backgroundColor: colors.background,
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 5,
+})
+
+const $bufferingOverlay: ThemedStyle<any> = () => ({
+  position: "absolute",
+  top: 0,
+  left: 0,
+  bottom: 0,
+  right: 0,
+  backgroundColor: "rgba(0,0,0,0.3)",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 10,
+})
+
+const $bufferingSpinner: ThemedStyle<any> = ({spacing}) => ({
+  backgroundColor: "rgba(0,0,0,0.7)",
+  borderRadius: 12,
+  paddingVertical: spacing.s4,
+  paddingHorizontal: spacing.s6,
+})
+
+const $bufferingText: ThemedStyle<any> = () => ({
+  color: "white",
+  fontSize: 14,
+  fontWeight: "500",
+})

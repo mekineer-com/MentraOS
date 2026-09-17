@@ -1,0 +1,143 @@
+import {ScrollView, Image, View} from "react-native"
+
+import {ConnectControllerButton} from "@/components/glasses/ConnectDeviceButton"
+import {Header, Screen, Icon} from "@/components/ignite"
+import {Spacer} from "@/components/ui/Spacer"
+import {useAppTheme} from "@/contexts/ThemeContext"
+import {useEngineSnapshot} from "@/hooks/useEngineSnapshot"
+import {useNavigationStore} from "@/stores/navigation"
+import {translate} from "@/i18n/translate"
+import {SETTINGS, useSetting} from "@mentra/engine"
+import {getGlassesImage} from "@/utils/getGlassesImage"
+import {Group} from "@/components/ui"
+import {RouteButton} from "@/components/ui/RouteButton"
+
+import {DeviceTypes} from "@mentra/engine"
+import {engine} from "@mentra/engine"
+
+import {EmptyState} from "@/components/glasses/info/EmptyState"
+import {showAlert} from "@/contexts/ModalContext"
+
+function DeviceSettings() {
+  const {theme} = useAppTheme()
+  const [defaultController] = useSetting(SETTINGS.default_controller.key)
+  const controllerConnected = useEngineSnapshot(engine.glasses.controller.status, (onChange) =>
+    engine.glasses.controller.onStatus(onChange),
+  ).connected
+  const [superMode] = useSetting(SETTINGS.super_mode.key)
+
+  const {push, goBack} = useNavigationStore.getState()
+
+  const confirmForgetController = async () => {
+    let result = await showAlert({
+      title: translate("settings:forgetController"),
+      message: translate("settings:forgetControllerConfirm"),
+      buttons: [{text: translate("common:cancel"), style: "cancel"}, {text: translate("connection:unpair")}],
+      options: {allowDismiss: false},
+    })
+    if (result === 1) {
+      try {
+        await engine.glasses.controller.forget()
+        // give us a second to forget the glasses before going back
+        setTimeout(() => {
+          goBack()
+        }, 500)
+      } catch (e) {
+        // Unpair failed — stay on the screen (dismissing would imply success
+        // while the controller is still paired).
+        console.warn("controller: forget failed:", e)
+      }
+    }
+  }
+
+  const confirmDisconnectController = async () => {
+    let result = await showAlert({
+      title: translate("settings:disconnectControllerTitle"),
+      message: translate("settings:disconnectControllerConfirm"),
+      buttons: [{text: translate("common:cancel"), style: "cancel"}, {text: translate("connection:disconnect")}],
+      options: {allowDismiss: false},
+    })
+
+    if (result === 1) {
+      try {
+        await engine.glasses.controller.disconnect()
+      } catch (e) {
+        console.log(e)
+      }
+    }
+  }
+
+  // Check if no glasses are paired at all
+  if (!defaultController) {
+    return <EmptyState />
+  }
+
+  return (
+    <View className="gap-6">
+      {superMode && (
+        <RouteButton label={translate("settings:layoutSettings")} onPress={() => push("/miniapps/settings/layout")} />
+      )}
+
+      <Group title={translate("deviceSettings:general")}>
+        {controllerConnected && defaultController !== DeviceTypes.SIMULATED && (
+          <RouteButton
+            icon={<Icon name="unlink" size={24} color={theme.colors.secondary_foreground} />}
+            label={translate("deviceSettings:disconnectController")}
+            onPress={confirmDisconnectController}
+          />
+        )}
+
+        {defaultController && (
+          <RouteButton
+            icon={<Icon name="unplug" size={24} color={theme.colors.secondary_foreground} />}
+            label={translate("deviceSettings:forgetController")}
+            onPress={confirmForgetController}
+          />
+        )}
+      </Group>
+
+      {/* this just gives the user a bit more space to scroll */}
+      <Spacer height={theme.spacing.s2} />
+    </View>
+  )
+}
+
+export default function ControllerSettings() {
+  const {theme} = useAppTheme()
+  const [defaultController] = useSetting(SETTINGS.default_controller.key)
+  const {goBack} = useNavigationStore.getState()
+  const controllerConnected = useEngineSnapshot(engine.glasses.controller.status, (onChange) =>
+    engine.glasses.controller.onStatus(onChange),
+  ).connected
+
+  const formatGlassesTitle = (title: string) => title.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  let pageSubtitle
+  let glassesComponent
+
+  if (defaultController) {
+    pageSubtitle = formatGlassesTitle(defaultController)
+    if (defaultController !== DeviceTypes.SIMULATED) {
+      glassesComponent = (
+        <Image source={getGlassesImage(defaultController)} style={{width: 110, maxHeight: 32}} resizeMode="contain" />
+      )
+    }
+  }
+
+  return (
+    <Screen preset="fixed">
+      <Header
+        title={translate("deviceSettings:title")}
+        subtitle={pageSubtitle}
+        leftIcon="chevron-left"
+        onLeftPress={() => goBack()}
+        RightActionComponent={glassesComponent}
+      />
+      <ScrollView className="pr-4 -mr-4" contentInsetAdjustmentBehavior="automatic">
+        {!controllerConnected && <Spacer height={theme.spacing.s6} />}
+        {!controllerConnected && <ConnectControllerButton />}
+        <Spacer height={theme.spacing.s6} />
+        <DeviceSettings />
+      </ScrollView>
+    </Screen>
+  )
+}

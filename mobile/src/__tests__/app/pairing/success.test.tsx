@@ -1,0 +1,159 @@
+import {engine, SETTINGS} from "@mentra/engine"
+import {useSettingsStore} from "@mentra/engine-host-internal"
+import {useRoute} from "@react-navigation/native"
+import {fireEvent, render, waitFor} from "@testing-library/react-native"
+import type {ReactNode} from "react"
+import {Platform} from "react-native"
+
+import PairingSuccessScreen from "@/app/pairing/success"
+import {usePushUnder} from "@/contexts/NavigationHistoryContext"
+import {useNavigationStore} from "@/stores/navigation"
+
+jest.mock("@react-navigation/native", () => ({
+  useRoute: jest.fn(),
+}))
+
+jest.mock("@/contexts/NavigationHistoryContext", () => ({
+  focusEffectPreventBack: jest.fn(),
+  usePushUnder: jest.fn(),
+}))
+
+jest.mock("@/stores/navigation", () => ({
+  useNavigationStore: {getState: jest.fn()},
+}))
+
+jest.mock("@/utils/getGlassesImage", () => ({
+  getAr99DisplayName: jest.fn(() => "Xingyi AR99"),
+  getAr99ImageSource: jest.fn(() => 1),
+  getGlassesImage: jest.fn(() => 1),
+}))
+
+jest.mock("@/i18n", () => ({
+  translate: jest.fn((key: string) => key),
+}))
+
+jest.mock("@/components/ignite", () => {
+  const {View} = require("react-native")
+  function MockScreen({children}: {children: ReactNode}) {
+    return <View>{children}</View>
+  }
+  return {Screen: MockScreen}
+})
+
+jest.mock("@/components/onboarding/OnboardingGuide", () => {
+  const {Text, TouchableOpacity, View} = require("react-native")
+  function MockOnboardingGuide({
+    endButtonFn,
+    endButtonText,
+    startButtonText,
+  }: {
+    endButtonFn: () => void
+    endButtonText: string
+    startButtonText: string
+  }) {
+    return (
+      <View>
+        <Text>{startButtonText}</Text>
+        <TouchableOpacity onPress={endButtonFn}>
+          <Text>{endButtonText}</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+  return {OnboardingGuide: MockOnboardingGuide}
+})
+
+const originalPlatformOS = Platform.OS
+
+function setPlatformOS(os: typeof Platform.OS) {
+  Object.defineProperty(Platform, "OS", {value: os, configurable: true, writable: true})
+}
+
+describe("pairing success screen", () => {
+  const clearHistoryAndGoHome = jest.fn()
+  const push = jest.fn()
+  const pushUnder = jest.fn()
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    useSettingsStore.getState().resetAllSettingsLocally()
+    setPlatformOS("ios")
+    ;(useRoute as jest.Mock).mockReturnValue({params: {deviceModel: "Mentra Live"}})
+    ;(useNavigationStore.getState as jest.Mock).mockReturnValue({clearHistoryAndGoHome, push})
+    ;(usePushUnder as jest.Mock).mockReturnValue(pushUnder)
+  })
+
+  afterEach(() => {
+    setPlatformOS(originalPlatformOS)
+  })
+
+  it("stacks missing Mentra Live setup steps in the expected order", async () => {
+    ;(engine.pairing.waitForBluetoothClassic as jest.Mock).mockResolvedValueOnce(false)
+
+    const {getAllByText} = render(<PairingSuccessScreen />)
+
+    await waitFor(() => expect(getAllByText("onboarding:continueSetup").length).toBeGreaterThan(0))
+    fireEvent.press(getAllByText("onboarding:continueSetup")[1])
+
+    await waitFor(() => expect(clearHistoryAndGoHome).toHaveBeenCalled())
+    expect(push).toHaveBeenCalledWith("/pairing/btclassic")
+    expect(pushUnder).toHaveBeenCalledTimes(1)
+    expect(pushUnder).toHaveBeenCalledWith("/ota/check-for-updates")
+    expect(engine.pairing.waitForBluetoothClassic).toHaveBeenCalledWith({timeoutMs: 1000})
+  })
+
+  it("uses connected Mentra Live state to skip btclassic setup", async () => {
+    ;(engine.pairing.waitForBluetoothClassic as jest.Mock).mockResolvedValueOnce(true)
+
+    const {getAllByText} = render(<PairingSuccessScreen />)
+
+    await waitFor(() => expect(getAllByText("onboarding:continueSetup").length).toBeGreaterThan(0))
+    fireEvent.press(getAllByText("onboarding:continueSetup")[1])
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/ota/check-for-updates"))
+    expect(pushUnder).not.toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalledWith("/pairing/btclassic")
+    expect(engine.pairing.waitForBluetoothClassic).toHaveBeenCalledWith({timeoutMs: 1000})
+  })
+
+  it("finishes non-Live pairing without adding setup routes", async () => {
+    ;(useRoute as jest.Mock).mockReturnValue({params: {deviceModel: "Even Realities G1"}})
+    await useSettingsStore.getState().setSetting(SETTINGS.onboarding_os_completed.key, true, false)
+
+    const {getAllByText} = render(<PairingSuccessScreen />)
+
+    await waitFor(() => expect(getAllByText("common:continue").length).toBeGreaterThan(0))
+    fireEvent.press(getAllByText("common:continue")[1])
+
+    await waitFor(() => expect(clearHistoryAndGoHome).toHaveBeenCalled())
+    expect(push).not.toHaveBeenCalled()
+    expect(pushUnder).not.toHaveBeenCalled()
+  })
+
+  it("finishes AR99 pairing without entering the generic OTA setup route", async () => {
+    ;(useRoute as jest.Mock).mockReturnValue({params: {deviceModel: "AR99", ar99ProjectName: "AR99"}})
+
+    const {getAllByText} = render(<PairingSuccessScreen />)
+
+    await waitFor(() => expect(getAllByText("common:continue").length).toBeGreaterThan(0))
+    fireEvent.press(getAllByText("common:continue")[1])
+
+    await waitFor(() => expect(clearHistoryAndGoHome).toHaveBeenCalled())
+    expect(push).not.toHaveBeenCalledWith("/ota/check-for-updates")
+    expect(pushUnder).not.toHaveBeenCalled()
+    expect(engine.pairing.waitForBluetoothClassic).not.toHaveBeenCalled()
+  })
+
+  it("opens MentraOS onboarding after pairing non-Live glasses when it is incomplete", async () => {
+    ;(useRoute as jest.Mock).mockReturnValue({params: {deviceModel: "Even Realities G1"}})
+
+    const {getAllByText} = render(<PairingSuccessScreen />)
+
+    await waitFor(() => expect(getAllByText("onboarding:continueSetup").length).toBeGreaterThan(0))
+    fireEvent.press(getAllByText("onboarding:continueSetup")[1])
+
+    await waitFor(() => expect(clearHistoryAndGoHome).toHaveBeenCalled())
+    expect(push).toHaveBeenCalledWith("/onboarding/os")
+    expect(pushUnder).not.toHaveBeenCalled()
+  })
+})
