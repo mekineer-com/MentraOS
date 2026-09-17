@@ -37,6 +37,17 @@ function announceHost(profile: {
   }).catch(() => undefined).finally(() => clearTimeout(timeout))
 }
 
+async function announceSavedHost() {
+  try {
+    const saved = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
+    if (!saved) return
+    const setup = parseIrisSetupOffer({offerId: "saved", profile: JSON.parse(saved)})
+    if (setup) announceHost(setup.profile)
+  } catch {
+    // Iris owns profile validation and can leave an empty or user-edited value here.
+  }
+}
+
 export function IrisUpdatePrompt() {
   const checking = useRef(false)
   const offered = useRef<string | null>(null)
@@ -64,13 +75,24 @@ export function IrisUpdatePrompt() {
           ])
           if (!manifestResponse.ok || !profileResponse.ok) {
             offered.current = null
+            if (manifestResponse.ok && profileResponse.status === 404) {
+              await showAlert({
+                title: translate("irisUpdate:failedTitle"),
+                message: "This Iris installer does not support OpenAlma automatic setup.",
+              })
+            }
+            await announceSavedHost()
             return
           }
           manifest = await manifestResponse.json()
           setup = parseIrisSetupOffer(await profileResponse.json())
-          if (!setup) return
+          if (!setup) {
+            await announceSavedHost()
+            return
+          }
         } catch {
           offered.current = null
+          await announceSavedHost()
           return
         } finally {
           clearTimeout(timeout)
@@ -80,8 +102,8 @@ export function IrisUpdatePrompt() {
         if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
 
         offered.current = setup.offerId
+        announceHost(setup.profile)
         if (!completing) {
-          announceHost(setup.profile)
           try {
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
             if (result.is_error()) throw result.error

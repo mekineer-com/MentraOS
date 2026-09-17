@@ -8,8 +8,11 @@ import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
 import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
 import {isIrisOffer, parseIrisSetupOffer} from "./irisUpdateOffer"
 
+let mockApplicationId = "com.mentra.mentra.openalma"
 jest.mock("expo-application", () => ({
-  applicationId: "com.mentra.mentra.openalma",
+  get applicationId() {
+    return mockApplicationId
+  },
   nativeApplicationVersion: "3.2.0",
 }))
 jest.mock("@/contexts/ModalContext", () => ({showAlert: jest.fn()}))
@@ -24,7 +27,19 @@ jest.mock("@mentra/engine-host-internal", () => ({
   localMiniappRuntime: {getSimpleStorage: jest.fn(), setSimpleStorage: jest.fn()},
 }))
 
-beforeEach(() => jest.clearAllMocks())
+beforeEach(() => {
+  jest.clearAllMocks()
+  mockApplicationId = "com.mentra.mentra.openalma"
+  global.fetch = jest.fn()
+})
+
+test("does nothing in the stock Mentra build", () => {
+  mockApplicationId = "com.mentra.mentra"
+  const view = render(createElement(IrisUpdatePrompt))
+  expect(global.fetch).not.toHaveBeenCalled()
+  expect(AppState.addEventListener).not.toHaveBeenCalled()
+  view.unmount()
+})
 
 test("accepts the launcher-selected Iris release regardless of version ordering", () => {
   expect(isIrisOffer({packageName: "com.openalma.mentra", version: "0.1.9"}, "offer-2", null)).toBe(true)
@@ -75,6 +90,9 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   await waitFor(() => expect(acknowledgements).toBe(2))
 
   expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
+  expect(
+    (global.fetch as jest.Mock).mock.calls.filter(([url]) => url.endsWith("/integration/mentra/host/seen")),
+  ).toHaveLength(2)
   expect(global.fetch).toHaveBeenCalledWith(
     "http://10.77.0.1/integration/mentra/host/seen",
     expect.objectContaining({
@@ -94,6 +112,47 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     "com.openalma.mentra", "openalma.connection-profile", JSON.stringify(profile),
   )
   expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(2)
+  view.unmount()
+})
+
+test("refreshes host capability from the saved Iris profile without an offer", async () => {
+  const profile = {
+    baseUrl: "http://10.77.0.1",
+    bearer: "fictional",
+    userId: "Test User",
+    soulId: "Test Soul",
+    deviceSessionId: "test-phone",
+  }
+  ;(appRegistry.getActiveVersion as jest.Mock).mockResolvedValue("0.1.10")
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockResolvedValue(JSON.stringify(profile))
+  global.fetch = jest.fn(async (url: string) => ({ok: url.endsWith("/host/seen")})) as unknown as typeof fetch
+
+  const view = render(createElement(IrisUpdatePrompt))
+  await waitFor(() =>
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://10.77.0.1/integration/mentra/host/seen",
+      expect.objectContaining({method: "POST"}),
+    ),
+  )
+  expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
+  view.unmount()
+})
+
+test("reports an installer missing OpenAlma profile support", async () => {
+  ;(appRegistry.getActiveVersion as jest.Mock).mockResolvedValue(null)
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockResolvedValue(null)
+  global.fetch = jest.fn(async (url: string) =>
+    url.endsWith("/miniapp.json") ? {ok: true, status: 200} : {ok: false, status: 404},
+  ) as unknown as typeof fetch
+
+  const view = render(createElement(IrisUpdatePrompt))
+  await waitFor(() =>
+    expect(showAlert).toHaveBeenCalledWith({
+      title: "irisUpdate:failedTitle",
+      message: "This Iris installer does not support OpenAlma automatic setup.",
+    }),
+  )
+  expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
   view.unmount()
 })
 
