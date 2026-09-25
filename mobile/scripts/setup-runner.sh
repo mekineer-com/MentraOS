@@ -419,7 +419,7 @@ if [[ "${SKIP_ANDROID:-0}" != "1" ]]; then
         SDKMANAGER="$BREW_PREFIX/share/android-commandlinetools/cmdline-tools/latest/bin/sdkmanager"
     else
         # Linux: manual cmdline-tools install.
-        ANDROID_HOME="$HOME/Android/Sdk"
+        ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
         mkdir -p "$ANDROID_HOME/cmdline-tools"
         if [[ ! -d "$ANDROID_HOME/cmdline-tools/latest" ]]; then
             TMP_DIR=$(mktemp -d)
