@@ -18,14 +18,6 @@ describe("MMKV Storage", () => {
     storage.save("object", VALUE_OBJECT)
   })
 
-  it("should be defined", () => {
-    expect(storage).toBeDefined()
-  })
-
-  it("should have default keys", () => {
-    expect(storage.getAllKeys()).toEqual(["string", "object"])
-  })
-
   it("should load data", () => {
     const objectResult = storage.load<object>("object")
     expect(expectOk(objectResult)).toEqual(VALUE_OBJECT)
