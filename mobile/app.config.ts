@@ -53,7 +53,7 @@ module.exports = ({config}: ConfigContext): Partial<ExpoConfig> => {
       `MENTRAOS_BUILD_NAME="${variantName}" is invalid. Must start with a letter and contain only letters, digits, spaces, or underscores.`,
     )
   }
-  const appName = isValidVariant ? variantName : variant.appName
+  const appName = isValidVariant ? (variantName.toLowerCase() === "openalma" ? "OpenAlma" : variantName) : variant.appName
   const baseId = variant.packageName
   // replace non-alphanumeric characters with underscores:
   const normalizedVariantId = variantName?.toLowerCase().replace(/[^a-zA-Z0-9_]/g, "")
