@@ -8,6 +8,7 @@ import {translate} from "@/i18n"
 import {engine} from "@mentra/engine"
 import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
 import {storage} from "@/utils/storage/storage"
+import {deploymentStore, useDeployment} from "@/services/deployment"
 import {DEFAULT_OPENALMA_ADDRESS, IRIS_PACKAGE, OPENALMA_ADDRESS_KEY, OPENALMA_HOST_KEY,
   OPENALMA_HOST_PACKAGE, isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
@@ -53,12 +54,13 @@ export async function reportOpenAlmaHost(baseUrl: string): Promise<string> {
 }
 
 export function IrisUpdatePrompt() {
+  const {activeDeployment} = useDeployment()
   const checking = useRef(false)
   const offered = useRef<string | null>(null)
   const installedOffer = useRef<string | null>(null)
 
   useEffect(() => {
-    if (Application.applicationId !== OPENALMA_HOST_PACKAGE) return
+    if (Application.applicationId !== OPENALMA_HOST_PACKAGE || activeDeployment.kind !== "consumer") return
 
     const check = async () => {
       if (checking.current) return
@@ -91,6 +93,7 @@ export function IrisUpdatePrompt() {
         }
         const persistedOffer = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY)
         const completing = installedOffer.current === setup.offerId || persistedOffer === setup.offerId
+        if (deploymentStore.getActive().kind !== "consumer") return
         if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
 
         offered.current = setup.offerId
@@ -154,7 +157,7 @@ export function IrisUpdatePrompt() {
     onState(AppState.currentState)
     const subscription = AppState.addEventListener("change", onState)
     return () => {clearInterval(timer); subscription.remove()}
-  }, [])
+  }, [activeDeployment.kind])
 
   return null
 }

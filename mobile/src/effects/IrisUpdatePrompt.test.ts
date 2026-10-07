@@ -9,6 +9,11 @@ import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
 import {isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
 let mockApplicationId = "com.mentra.mentra.openalma"
+let mockDeploymentKind = "consumer"
+jest.mock("@/services/deployment", () => ({
+  deploymentStore: {getActive: () => ({kind: mockDeploymentKind})},
+  useDeployment: () => ({activeDeployment: {kind: mockDeploymentKind}}),
+}))
 jest.mock("expo-application", () => ({
   get applicationId() {
     return mockApplicationId
@@ -32,7 +37,9 @@ jest.mock("@mentra/engine-host-internal", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks()
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockReset()
   mockApplicationId = "com.mentra.mentra.openalma"
+  mockDeploymentKind = "consumer"
   Object.defineProperty(AppState, "currentState", {configurable: true, value: "active"})
   global.fetch = jest.fn()
 })
@@ -43,6 +50,34 @@ test("does nothing in the stock Mentra build", () => {
   expect(global.fetch).not.toHaveBeenCalled()
   expect(AppState.addEventListener).not.toHaveBeenCalled()
   view.unmount()
+})
+
+test("workspace mode neither starts the private updater nor accepts a waiting offer", async () => {
+  mockDeploymentKind = "workspace"
+  const view = render(createElement(IrisUpdatePrompt))
+  expect(global.fetch).not.toHaveBeenCalled()
+  expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
+  expect(AppState.addEventListener).not.toHaveBeenCalled()
+  view.unmount()
+
+  mockDeploymentKind = "consumer"
+  global.fetch = jest.fn(async (url: string) => {
+    if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
+    if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
+    if (url.endsWith("/openalma-profile.json")) return {ok: true, json: async () => ({offerId: "pending", profile: {
+      baseUrl: "http://10.77.0.1", bearer: "fictional", userId: "Test User",
+      soulId: "Test Soul", deviceSessionId: "android-test-phone",
+    }})}
+    return {ok: true}
+  }) as unknown as typeof fetch
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async () => {
+    mockDeploymentKind = "workspace"
+    return null
+  })
+  const pending = render(createElement(IrisUpdatePrompt))
+  await waitFor(() => expect(localMiniappRuntime.getSimpleStorage).toHaveBeenCalled())
+  expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
+  pending.unmount()
 })
 
 test("accepts the launcher-selected Iris release regardless of version ordering", () => {
