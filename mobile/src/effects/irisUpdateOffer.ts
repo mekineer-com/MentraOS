@@ -1,6 +1,19 @@
 import semver from "semver"
 
 export const IRIS_PACKAGE = "com.openalma.mentra"
+export const OPENALMA_HOST_PACKAGE = "com.mentra.mentra.openalma"
+export const OPENALMA_HOST_KEY = "openalma.host"
+export const OPENALMA_ADDRESS_KEY = "openalma.server-address"
+export const DEFAULT_OPENALMA_ADDRESS = "http://10.77.0.1"
+
+export function openAlmaAddresses(value: string): {baseUrl: string; installerUrl: string} {
+  const baseUrl = value.trim().replace(/\/+$/, "")
+  const match = /^(https?):\/\/(\[[^\]\s]+\]|[^\/:@?#\s]+)(?::(\d+))?$/.exec(baseUrl)
+  if (!match || (match[3] && (Number(match[3]) < 1 || Number(match[3]) > 65535))) {
+    throw new Error("Enter a valid OpenAlma address")
+  }
+  return {baseUrl, installerUrl: `http://${match[2]}:6789`}
+}
 
 type IrisProfile = {
   baseUrl: string

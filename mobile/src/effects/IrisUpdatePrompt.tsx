@@ -1,50 +1,54 @@
 import {useEffect, useRef} from "react"
 import {AppState} from "react-native"
 import * as Application from "expo-application"
+import * as Device from "expo-device"
 
 import {showAlert} from "@/contexts/ModalContext"
 import {translate} from "@/i18n"
 import {engine} from "@mentra/engine"
 import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
-import {IRIS_PACKAGE, isIrisOffer, parseIrisSetupOffer} from "./irisUpdateOffer"
+import {storage} from "@/utils/storage/storage"
+import {DEFAULT_OPENALMA_ADDRESS, IRIS_PACKAGE, OPENALMA_ADDRESS_KEY, OPENALMA_HOST_KEY,
+  OPENALMA_HOST_PACKAGE, isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
-const HOST_PACKAGE = "com.mentra.mentra.openalma"
-const DEFAULT_IRIS_SOURCE = "http://10.77.0.1:6789"
 const IRIS_PROFILE_KEY = "openalma.connection-profile"
 const IRIS_PROFILE_CLEARED_KEY = "openalma.connection-profile-cleared"
 const IRIS_INSTALLED_OFFER_KEY = "openalma.installed-offer"
 
-function announceHost(profile: {
-  baseUrl: string
-  bearer: string
-  userId: string
-  deviceSessionId: string
-}) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 2000)
-  void fetch(`${profile.baseUrl.replace(/\/+$/, "")}/integration/mentra/host/seen`, {
-    method: "POST",
-    signal: controller.signal,
-    headers: {Authorization: `Bearer ${profile.bearer}`, "Content-Type": "application/json"},
-    body: JSON.stringify({
-      user_id: profile.userId,
-      device_session_id: profile.deviceSessionId,
-      host_package: HOST_PACKAGE,
-      host_version: Application.nativeApplicationVersion || "unknown",
-      protocol_version: 1,
-      capabilities: ["automatic_iris_install", "iris_profile_handoff", "iris_install_ack"],
-    }),
-  }).catch(() => undefined).finally(() => clearTimeout(timeout))
+export function savedOpenAlmaAddress(): string {
+  const saved = storage.load<string>(OPENALMA_ADDRESS_KEY)
+  return saved.is_ok() ? saved.value : DEFAULT_OPENALMA_ADDRESS
 }
 
-async function announceSavedHost() {
+export async function reportOpenAlmaHost(baseUrl: string): Promise<string> {
+  const deviceSessionId = `android-${Application.getAndroidId()}`
+  const host = {host_package: OPENALMA_HOST_PACKAGE,
+    host_version: Application.nativeApplicationVersion || "unknown"}
+  await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, OPENALMA_HOST_KEY, JSON.stringify(host))
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 2000)
   try {
-    const saved = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY)
-    if (!saved) return
-    const setup = parseIrisSetupOffer({offerId: "saved", profile: JSON.parse(saved)})
-    if (setup) announceHost(setup.profile)
-  } catch {
-    // Iris owns profile validation and can leave an empty or user-edited value here.
+    const ownerResponse = await fetch(`${baseUrl}/integration/mentra/owner`, {signal: controller.signal})
+    if (!ownerResponse.ok) throw new Error("OpenAlma is unavailable")
+    const owner = await ownerResponse.json()
+    if (typeof owner.user_id !== "string" || !owner.user_id.trim()) {
+      throw new Error("Set up the OpenAlma owner in the launcher")
+    }
+    const response = await fetch(`${baseUrl}/integration/mentra/host/seen`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        user_id: owner.user_id,
+        device_session_id: deviceSessionId,
+        ...host,
+        default_name: Device.deviceName?.trim() || Device.modelName?.trim() || "Phone",
+      }),
+    })
+    if (!response.ok) throw new Error(`OpenAlma reporting failed (${response.status})`)
+    return deviceSessionId
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -54,15 +58,14 @@ export function IrisUpdatePrompt() {
   const installedOffer = useRef<string | null>(null)
 
   useEffect(() => {
-    if (Application.applicationId !== HOST_PACKAGE) return
+    if (Application.applicationId !== OPENALMA_HOST_PACKAGE) return
 
     const check = async () => {
       if (checking.current) return
       checking.current = true
       try {
-        const installed = await appRegistry.getActiveVersion(IRIS_PACKAGE)
-        const sourceUrl = (installed && appRegistry.getReleaseIdentity(IRIS_PACKAGE, installed)?.sourceUrl) ||
-          DEFAULT_IRIS_SOURCE
+        const {baseUrl, installerUrl: sourceUrl} = openAlmaAddresses(savedOpenAlmaAddress())
+        const deviceSessionId = await reportOpenAlmaHost(baseUrl)
 
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 2000)
@@ -75,24 +78,13 @@ export function IrisUpdatePrompt() {
           ])
           if (!manifestResponse.ok || !profileResponse.ok) {
             offered.current = null
-            if (manifestResponse.ok && profileResponse.status === 404) {
-              await showAlert({
-                title: translate("irisUpdate:failedTitle"),
-                message: "This Iris installer does not support OpenAlma automatic setup.",
-              })
-            }
-            await announceSavedHost()
             return
           }
           manifest = await manifestResponse.json()
           setup = parseIrisSetupOffer(await profileResponse.json())
-          if (!setup) {
-            await announceSavedHost()
-            return
-          }
+          if (!setup || setup.profile.deviceSessionId !== deviceSessionId) return
         } catch {
           offered.current = null
-          await announceSavedHost()
           return
         } finally {
           clearTimeout(timeout)
@@ -102,7 +94,6 @@ export function IrisUpdatePrompt() {
         if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
 
         offered.current = setup.offerId
-        announceHost(setup.profile)
         if (!completing) {
           try {
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
@@ -143,18 +134,26 @@ export function IrisUpdatePrompt() {
             message: error instanceof Error ? error.message : String(error),
           })
         }
-      } catch (error) {
-        console.warn("IRIS_UPDATE: check failed", error)
+      } catch {
+        // An unavailable server/offer is normal for this foreground probe.
+        offered.current = null
       } finally {
         checking.current = false
       }
     }
 
-    void check()
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void check()
-    })
-    return () => subscription.remove()
+    let timer: ReturnType<typeof setInterval> | undefined
+    const onState = (state: string) => {
+      clearInterval(timer)
+      timer = undefined
+      if (state === "active") {
+        void check()
+        timer = setInterval(() => void check(), 5000)
+      }
+    }
+    onState(AppState.currentState)
+    const subscription = AppState.addEventListener("change", onState)
+    return () => {clearInterval(timer); subscription.remove()}
   }, [])
 
   return null

@@ -2,7 +2,7 @@ import {Platform, View} from "react-native"
 import {ScrollView} from "react-native-gesture-handler"
 
 import {VersionInfo} from "@/components/dev/VersionInfo"
-import {Icon, Screen} from "@/components/ignite"
+import {Icon, Screen, TextField} from "@/components/ignite"
 import {DeviceSettingsSection} from "@/components/settings/DeviceSettingsSection"
 import {Group} from "@/components/ui/Group"
 import {RouteButton} from "@/components/ui/RouteButton"
@@ -11,8 +11,12 @@ import {useAppTheme} from "@/contexts/ThemeContext"
 import {useNavigationStore} from "@/stores/navigation"
 import {translate} from "@/i18n"
 import {SETTINGS, useSetting} from "@mentra/engine"
-import {useRef} from "react"
+import {useRef, useState} from "react"
 import {useRegisterCapsule} from "@/stores/capsule"
+import * as Application from "expo-application"
+import {reportOpenAlmaHost, savedOpenAlmaAddress} from "@/effects/IrisUpdatePrompt"
+import {OPENALMA_ADDRESS_KEY, OPENALMA_HOST_PACKAGE, openAlmaAddresses} from "@/effects/irisUpdateOffer"
+import {storage} from "@/utils/storage/storage"
 
 export default function MainSettingsPage() {
   const {theme} = useAppTheme()
@@ -21,6 +25,24 @@ export default function MainSettingsPage() {
   const [superMode] = useSetting(SETTINGS.super_mode.key)
   const [appearanceMenuEnabled] = useSetting(SETTINGS.appearance_menu_enabled.key)
   const viewShotRef = useRef<View>(null)
+  const [openAlmaAddress, setOpenAlmaAddress] = useState(savedOpenAlmaAddress)
+  const [addressPending, setAddressPending] = useState(false)
+  const [addressError, setAddressError] = useState<string | null>(null)
+  const saveAddress = async () => {
+    setAddressPending(true)
+    setAddressError(null)
+    try {
+      const {baseUrl} = openAlmaAddresses(openAlmaAddress)
+      const saved = storage.save(OPENALMA_ADDRESS_KEY, baseUrl)
+      if (saved.is_error()) throw saved.error
+      setOpenAlmaAddress(baseUrl)
+      await reportOpenAlmaHost(baseUrl)
+    } catch (error) {
+      setAddressError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAddressPending(false)
+    }
+  }
 
   useRegisterCapsule({
     packageName: "com.mentra.settings",
@@ -59,6 +81,13 @@ export default function MainSettingsPage() {
           <DeviceSettingsSection />
 
           <Group title={translate("account:appSettings")}>
+            {Application.applicationId === OPENALMA_HOST_PACKAGE && (
+              <TextField labelTx="irisUpdate:serverAddress" value={openAlmaAddress}
+                onChangeText={setOpenAlmaAddress} onEndEditing={() => void saveAddress()}
+                autoCapitalize="none" autoCorrect={false} returnKeyType="done"
+                editable={!addressPending} status={addressError ? "error" : undefined}
+                helper={addressError ?? "http://10.77.0.1"} />
+            )}
             {appearanceMenuEnabled && (
               <RouteButton
                 icon={<Icon name="sun" size={24} color={theme.colors.secondary_foreground} />}

@@ -1,5 +1,6 @@
 const en = {
   irisUpdate: {
+    serverAddress: "OpenAlma server address",
     failedTitle: "Iris update failed",
     completionFailedTitle: "Iris installed; setup incomplete",
   },
