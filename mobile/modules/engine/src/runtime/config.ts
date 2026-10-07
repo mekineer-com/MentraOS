@@ -61,7 +61,7 @@ export type NavManeuverEvent = {
 export type NavOffRouteEvent = {kind: "off_route"; offRouteDistanceMeters: number}
 export type NavReroutingEvent = {kind: "rerouting"}
 export type NavArrivedEvent = {kind: "arrived"}
-export type NavErrorEvent = {kind: "error"; message: string}
+export type NavErrorEvent = {kind: "error"; message: string; terminal?: boolean}
 export type NavUpdate = NavManeuverEvent | NavOffRouteEvent | NavReroutingEvent | NavArrivedEvent | NavErrorEvent
 
 export type NavLocation = {
@@ -101,6 +101,10 @@ export interface StreamVideoConfig {
   width?: number
   height?: number
   bitrate?: number
+  /** WHIP minimum target in bps; omitted leaves it unset. Clamped to the maximum. */
+  minBitrateBps?: number
+  /** WHIP startup bitrate in bps, clamped to the requested bounds. */
+  initialBitrateBps?: number
   fps?: number
 }
 

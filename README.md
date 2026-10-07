@@ -32,7 +32,7 @@
 >
 > For normal use, install stock Mentra from the official stores above. As of September 2026, [Mentra 3.0's Miniapp Store is not yet available](https://mentraglass.com/blogs/blog/mentra-3-0-local-miniapps-full-user-control-and-enterprise-smart-glasses), so OpenAlma needs a direct way to install and update Iris now; that is why this fork exists. This public fork is an optional parallel Android host for an operator-managed [OpenAlma Iris](https://github.com/mekineer-com/iris) deployment. It adds automatic Iris install/update/repair, profile handoff, foreground opening, and exact completion acknowledgement; the stock app remains supported through OpenAlma's manual QR flow.
 >
-> The tradeoff is deliberate: this fork is independently maintained, may lag upstream improvements, does not receive stock Store updates, and currently targets the operator-specific private Iris source at `http://10.77.0.1:6789`. Build it only as the separate `com.mentra.mentra.openalma` application with `MENTRAOS_BUILD_NAME=openalma` or `mobile/scripts/android-release.mjs --name openalma`; without that identity its updater is disabled. Iris remains a separate repository at `miniapps/openalma/` and is absent from this Git history. The handoff depends on Iris's pinned `@mentra/miniapp-cli@0.1.0-dev.1` patch, so revalidate release serving, profile transfer, and acknowledgement before changing that dependency. These minimal changes are based on upstream tag `mentra-builds-v3.2.0` and are not intended for upstream submission. Everything below is upstream MentraOS documentation.
+> The tradeoff is deliberate: this fork is independently maintained, may lag upstream improvements, does not receive stock Store updates, and currently targets the operator-specific private Iris source at `http://10.77.0.1:6789`. Build it only as the separate `com.mentra.mentra.openalma` application with `MENTRAOS_BUILD_NAME=openalma` or `mobile/scripts/android-release.mjs --name openalma`; without that identity its updater is disabled. Iris remains a separate repository at `miniapps/openalma/` and is absent from this Git history. The handoff depends on Iris's pinned `@mentra/miniapp-cli@0.1.0-dev.1` patch, so revalidate release serving, profile transfer, and acknowledgement before changing that dependency. These minimal changes are based on upstream tag `mentra-v3.2.1-beta.631` and are not intended for upstream submission. Everything below is upstream MentraOS documentation.
 
 ## Write Once, Run on Any Smart Glasses
 
@@ -40,7 +40,7 @@ MentraOS is how developers and businesses build smart glasses apps.
 
 MentraOS handles pairing, connection, data streaming, hardware access, and cross-device compatibility, so you can focus on building amazing apps. Development goes from months to days.
 
-Every component is open source under the MIT license, giving you privacy, freedom, and control.
+Every component is open source under the Apache License 2.0, giving you privacy, freedom, and control.
 
 ## Supported Smart Glasses
 
@@ -92,7 +92,7 @@ MentraOS works across a growing ecosystem of smart glasses.
 - **Hardware Access:** Use displays, microphones, cameras, speakers, and everything else smart glasses expose from one API.
 - **App Distribution:** Publish to the Mentra MiniApp Store and reach users across the MentraOS ecosystem.
 - **Business Deployment:** Deploy smart glasses apps for field work, remote support, training, accessibility, and compliance-sensitive workflows. MentraOS is already being deployed by Fortune 500 companies.
-- **Open Source Control:** Own it, host it, modify it, and extend it. MentraOS is MIT-licensed infrastructure designed for privacy, transparency, and freedom from hardware or cloud lock-in.
+- **Open Source Control:** Own it, host it, modify it, and extend it. MentraOS is Apache-2.0-licensed infrastructure designed for privacy, transparency, and freedom from hardware or cloud lock-in.
 
 ## Apps on the Mentra MiniApp Store
 
@@ -150,7 +150,7 @@ Looking for ways to contribute? We mark issues we'd love the community to help w
 
 ## License
 
-MIT License
+Apache License 2.0
 
 Copyright 2026 Mentra Labs, Inc.
 

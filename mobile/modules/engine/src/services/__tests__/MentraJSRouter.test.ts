@@ -4,6 +4,7 @@ import {afterEach, beforeEach, describe, expect, test, jest} from "bun:test"
 
 import type localMiniappRuntime from "../LocalMiniappRuntime"
 import {MentraJSRouter, type MentraJSCrustBinding} from "../MentraJSRouter"
+import {MentraUIRouter} from "../MentraUIRouter"
 
 type LocalMiniappRuntime = typeof localMiniappRuntime
 
@@ -81,7 +82,7 @@ function buildMockRuntime() {
   }> = []
   const handleRawCalls: Array<{packageName: string; raw: string}> = []
   const unregisterCalls: string[] = []
-  const probeCalls: Array<{packageName: string; reason?: string}> = []
+  const probeCalls: Array<{packageName: string; reason?: string; timeoutMs?: number}> = []
   const setManifestCalls: Array<{packageName: string; installedManifest: unknown}> = []
   const resetHandshakeCalls: string[] = []
   const runtime = {
@@ -94,8 +95,8 @@ function buildMockRuntime() {
     unregisterApp(packageName: string) {
       unregisterCalls.push(packageName)
     },
-    probeForegroundLiveness(packageName: string, reason?: string) {
-      probeCalls.push({packageName, reason})
+    probeForegroundLiveness(packageName: string, reason?: string, timeoutMs?: number) {
+      probeCalls.push({packageName, reason, timeoutMs})
     },
     setInstalledManifest(packageName: string, installedManifest: unknown) {
       setManifestCalls.push({packageName, installedManifest})
@@ -252,6 +253,19 @@ describe("MentraJSRouter", () => {
     expect(logger.error).toHaveBeenCalledTimes(1)
   })
 
+  test("ready_nack is a warn, not an error — the context is busy, not dead", () => {
+    router.start()
+    crust.emit("mentrajs_message", {
+      packageName: "com.mentra.call",
+      iface: "__error",
+      method: "ready_nack",
+      argsJson: '{"phase":"steady-state","timeoutMs":3000}',
+    })
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn.mock.calls[0]![0]).toContain("ready_nack")
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+
   test("unknown iface logs a debug line but does NOT crash", () => {
     router.start()
     crust.emit("mentrajs_message", {
@@ -332,7 +346,10 @@ describe("MentraJSRouter", () => {
     await router.spawnAndRegister("com.foo", "console.log(1)")
     router.probeForegroundLiveness("com.foo", "foreground-open")
 
-    expect(runtimeMock.probeCalls).toEqual([{packageName: "com.foo", reason: "foreground-open"}])
+    expect(runtimeMock.probeCalls).toEqual([{packageName: "com.foo", reason: "foreground-open", timeoutMs: undefined}])
+
+    router.probeForegroundLiveness("com.foo", "app-active", 12_000)
+    expect(runtimeMock.probeCalls[1]).toEqual({packageName: "com.foo", reason: "app-active", timeoutMs: 12_000})
   })
 
   test("spawnAndRegister returns false when native spawn fails", async () => {
@@ -451,6 +468,43 @@ describe("MentraJSRouter", () => {
       packageName: "com.foo",
       envelope: {kind: "init"},
     })
+  })
+
+  test("recovery reopens mounted UI once the replacement connects, not at init", async () => {
+    const {MentraJSCrashController} = await import("../MentraJSCrashController")
+    router.crashController = new MentraJSCrashController({backoffMs: [1], maxRetries: 3})
+    router.uiRouter = new MentraUIRouter(crust.binding)
+    router.uiRouter.bindWebView("com.foo", () => {})
+    router.start()
+    await router.spawnAndRegister("com.foo", "/* miniapp */")
+    crust.dispatchCalls.length = 0
+    ;(runtimeMock.runtime as unknown as {onLivenessTimeout: (p: string) => void}).onLivenessTimeout("com.foo")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // UI_OPEN before the fresh SDK session exists would be dropped.
+    expect(crust.dispatchCalls.map((call) => call.envelope.kind)).toEqual(["init"])
+    crust.emit("mentrajs_message", {
+      packageName: "com.foo",
+      iface: "__bridge",
+      method: "send",
+      args: [JSON.stringify({payload: {type: "miniapp_connect", packageName: "com.foo"}})],
+    })
+    const reopen = crust.dispatchCalls.filter((call) => call.envelope.kind === "bridge")
+    expect(reopen).toHaveLength(1)
+    expect(JSON.parse(reopen[0]!.envelope.raw as string)).toMatchObject({
+      payload: {streamType: "_ui", data: {type: "UI_OPEN"}},
+    })
+  })
+
+  test("recovery does not announce an unmounted UI", async () => {
+    const {MentraJSCrashController} = await import("../MentraJSCrashController")
+    router.crashController = new MentraJSCrashController({backoffMs: [1], maxRetries: 3})
+    router.uiRouter = new MentraUIRouter(crust.binding)
+    router.start()
+    await router.spawnAndRegister("com.foo", "/* miniapp */")
+    crust.dispatchCalls.length = 0
+    ;(runtimeMock.runtime as unknown as {onLivenessTimeout: (p: string) => void}).onLivenessTimeout("com.foo")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(crust.dispatchCalls.map((call) => call.envelope.kind)).toEqual(["init"])
   })
 
   test("listener throwing does not poison subsequent events", () => {

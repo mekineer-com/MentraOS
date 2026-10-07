@@ -23,10 +23,9 @@
  * Host-side handler bodies (display fan-out, mic state, transcription,
  * navigation, etc.) live untouched in `LocalMiniappRuntime.ts`.
  *
- * Cloud-message routing (`phone_stream_status`, `phone_managed_stream_status`)
- * goes straight through `LocalMiniappRuntime.handleCloudMessage` — nothing
- * for the router to do; the responses arrive inside an envelope whose
- * `sendMessage` was already registered via the same path here.
+ * PhoneStreamCoordinator delivers stream status through LocalMiniappRuntime
+ * to the miniapp's registered `sendMessage` callback, using the same local
+ * bridge as other responses and events.
  *
  * The router also bridges native error / log / unhandled-rejection
  * events (`iface: "__log"`, `iface: "__error"`) into the standard
@@ -92,6 +91,18 @@ const defaultLogger: RouterLogger = {
   error: (m, p) => console.error(`[MentraJSRouter] ${m}`, p ?? ""),
 }
 
+/**
+ * How long a spawned background may take to connect and settle its init before
+ * the host opens its UI anyway. A hung or broken background must not brick it.
+ */
+export const BACKGROUND_READY_TIMEOUT_MS = 10_000
+
+/** Timer used for the UI-hold deadline. The engine injects BgTimer. */
+export interface RouterTimer {
+  setTimeout(callback: () => void, ms: number): number
+  clearTimeout(id: number): void
+}
+
 interface SpawnCache {
   miniappJs: string
   permissions: string[]
@@ -101,6 +112,12 @@ interface SpawnCache {
 export class MentraJSRouter {
   private subscription: EventSubscription | null = null
   private readonly registered: Set<string> = new Set()
+  private readonly replacementConnects = new Set<string>()
+  /** The host's id for each package's current context, sent to it in `init`. */
+  private readonly sessions = new Map<string, string>()
+  private sessionSeq = 0
+  /** Spawned backgrounds whose UI is still held, with their ready deadline. */
+  private readonly readyTimers = new Map<string, number>()
   /** Cached spawn arguments so the crash controller can respawn after a backoff. */
   private readonly spawnCache: Map<string, SpawnCache> = new Map()
   /** Active respawn timers (so unregister() can cancel a pending respawn). */
@@ -113,6 +130,16 @@ export class MentraJSRouter {
    * miniapp's last-known JS source after the backoff delay.
    */
   crashController: MentraJSCrashController | null = null
+
+  /**
+   * Timer for the UI-hold deadline. MiniappEngine injects BgTimer because plain
+   * JS timers pause while the Android app is backgrounded; tests keep the
+   * global timers.
+   */
+  timer: RouterTimer = {
+    setTimeout: (callback, ms) => setTimeout(callback, ms) as unknown as number,
+    clearTimeout: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+  }
 
   /** Hook called when a package transitions to CRASHLOOP_DISABLED. */
   onCrashloop: ((packageName: string, reason: string) => void) | null = null
@@ -201,6 +228,9 @@ export class MentraJSRouter {
       installedManifest,
     )
     this.registered.add(packageName)
+    this.replacementConnects.add(packageName)
+    this.uiRouter?.backgroundStarting(packageName)
+    this.armReadyDeadline(packageName)
     // JSContext is the source-of-truth for "miniapp running". The
     // home tile / tray reads this registry to project the `running`
     // flag — UI WebView open/close is separate.
@@ -262,7 +292,8 @@ export class MentraJSRouter {
     // MiniappSession and call the user's handler. Without this
     // dispatch the user's code never runs — `registerMiniapp` just
     // assigns to a global and waits.
-    const sessionId = `${packageName}-${Date.now().toString(36)}`
+    const sessionId = this.nextSessionId(packageName)
+    this.logger.log(`initializing background for ${packageName}`, {sessionId})
     void this.crust.mentraJsDispatchToJs(packageName, {kind: "init", sessionId})
 
     return true
@@ -278,17 +309,30 @@ export class MentraJSRouter {
     // its CONNECT handshake NOW so waitForConnect() blocks through the respawn
     // backoff window instead of resolving immediately against the dead context
     // (an action invoked mid-backoff would otherwise be delivered to nothing).
+    this.logger.warn(`background restart for ${packageName}`, {
+      reason,
+      uiBound: this.uiRouter?.isBound(packageName) ?? false,
+    })
+    this.replacementConnects.delete(packageName)
+    this.sessions.delete(packageName)
+    this.clearReadyTimer(packageName)
+    this.uiRouter?.backgroundRestarting(packageName)
     this.runtime.resetHandshake(packageName)
     const controller = this.crashController
-    if (!controller) return
+    if (!controller) {
+      this.uiRouter?.backgroundStopped(packageName)
+      return
+    }
     const cached = this.spawnCache.get(packageName)
     if (!cached) {
       this.logger.warn(`crash for ${packageName} but no cached spawn args — cannot respawn`)
       controller.onCrash(packageName, reason)
+      this.uiRouter?.backgroundStopped(packageName)
       return
     }
     const outcome = controller.onCrash(packageName, reason)
     if (outcome.surfaceCrashloopBanner) {
+      this.uiRouter?.backgroundStopped(packageName)
       this.onCrashloop?.(packageName, reason)
       islandNotifications.emit({kind: "miniapp_crashloop", packageName, reason, timestamp: Date.now()})
       return
@@ -296,7 +340,10 @@ export class MentraJSRouter {
     if (outcome.showRestartToast) {
       this.onRestartToast?.(packageName, reason)
     }
-    if (outcome.scheduleRespawnAfterMs == null) return
+    if (outcome.scheduleRespawnAfterMs == null) {
+      this.uiRouter?.backgroundStopped(packageName)
+      return
+    }
     // Cancel any prior pending respawn before scheduling a new one.
     const existing = this.respawnTimers.get(packageName)
     if (existing) clearTimeout(existing)
@@ -315,6 +362,7 @@ export class MentraJSRouter {
         )
         if (!ok) {
           this.logger.error(`crash respawn failed for ${packageName}`)
+          this.uiRouter?.backgroundStopped(packageName)
           return
         }
         if (cached.permissions.length > 0) {
@@ -324,9 +372,9 @@ export class MentraJSRouter {
         controller.onSpawn(packageName)
         // Re-fire the init envelope so the respawned context's
         // `registerMiniapp` handler runs again.
-        const sessionId = `${packageName}-${Date.now().toString(36)}`
+        const sessionId = this.nextSessionId(packageName)
         void this.crust.mentraJsDispatchToJs(packageName, {kind: "init", sessionId})
-        this.logger.log(`respawned ${packageName} after crash`)
+        this.logger.log(`respawned ${packageName} after crash`, {sessionId})
       })()
     }, outcome.scheduleRespawnAfterMs)
     this.respawnTimers.set(packageName, timer)
@@ -353,6 +401,10 @@ export class MentraJSRouter {
       clearTimeout(pending)
       this.respawnTimers.delete(packageName)
     }
+    this.replacementConnects.delete(packageName)
+    this.sessions.delete(packageName)
+    this.clearReadyTimer(packageName)
+    this.uiRouter?.backgroundStopped(packageName)
     this.spawnCache.delete(packageName)
     this.crashController?.onKill(packageName)
     this.runtime.unregisterApp(packageName)
@@ -379,9 +431,9 @@ export class MentraJSRouter {
    * router gates this to registered packages and keeps LocalMiniappView from
    * reaching into runtime internals.
    */
-  probeForegroundLiveness(packageName: string, reason = "foreground-open"): void {
+  probeForegroundLiveness(packageName: string, reason = "foreground-open", timeoutMs?: number): void {
     if (!this.registered.has(packageName)) return
-    this.runtime.probeForegroundLiveness(packageName, reason)
+    this.runtime.probeForegroundLiveness(packageName, reason, timeoutMs)
   }
 
   // ----------------------------------------------------------------
@@ -407,14 +459,40 @@ export class MentraJSRouter {
       // If the payload is a UI_SEND envelope, route it to the bound
       // WebView instead of LocalMiniappRuntime.
       // session.ui.send → DispatchTransport.send → here.
-      if (this.uiRouter) {
-        const innerPayload = this.peekBridgePayloadType(raw)
-        if (innerPayload?.type === "UI_SEND") {
-          this.uiRouter.routeFromBackground(packageName, innerPayload)
-          return
-        }
+      const innerPayload = this.peekBridgePayloadType(raw)
+      if (this.uiRouter && innerPayload?.type === "UI_SEND") {
+        this.uiRouter.routeFromBackground(packageName, innerPayload)
+        return
+      }
+      // A context killed for a restart can still have CONNECT or READY queued.
+      // SDKs that echo the host's session id let us drop them before the
+      // runtime handshakes with them; older ones send none and are trusted.
+      if (typeof innerPayload?.sessionId === "string" && innerPayload.sessionId !== this.sessions.get(packageName)) {
+        this.logger.warn(`dropping ${String(innerPayload.type)} from a previous ${packageName} context`)
+        return
       }
       this.runtime.handleRawMessage(packageName, raw)
+      // CONNECT_ACK is sent synchronously by handleConnect, so UI_OPEN lands
+      // after the fresh SDK transport exists.
+      if (innerPayload?.type === "miniapp_connect") {
+        this.logger.log(`CONNECT received for ${packageName}`, {uiBound: this.uiRouter?.isBound(packageName) ?? false})
+        if (this.replacementConnects.delete(packageName)) {
+          if (!this.readyTimers.has(packageName)) {
+            // The deadline passed before CONNECT: the UI is showing and its
+            // frames were held for this session. Release them now.
+            this.uiRouter?.backgroundReady(packageName)
+          } else if (innerPayload.initReady !== true) {
+            // SDKs that announce READY keep the UI held until their init
+            // settles; older ones are ready once connected.
+            this.markBackgroundReady(packageName, "connect")
+          }
+        }
+      } else if (innerPayload?.type === "miniapp_ready") {
+        // Only the current session's READY counts: one queued by a killed
+        // context can arrive after its replacement spawned but before it
+        // connected.
+        if (!this.replacementConnects.has(packageName)) this.markBackgroundReady(packageName, "ready")
+      }
       return
     }
 
@@ -432,8 +510,8 @@ export class MentraJSRouter {
         method === "warn"
           ? this.logger.warn
           : method === "error" || method === "fatal"
-            ? this.logger.error
-            : this.logger.log
+          ? this.logger.error
+          : this.logger.log
       // Emit a synthetic "[throttled N]" line in place of the next
       // would-be-allowed log to summarise drops.
       if (!decision.allowed) {
@@ -469,7 +547,13 @@ export class MentraJSRouter {
     //    dead and let the host surface a "tap to retry" banner.
     if (iface === "__error") {
       const payload = this.tryParseArgs(msg.argsJson)
-      this.logger.error(`[${packageName}] ${method}`, payload)
+      // ready_nack is a liveness probe, not a crash. Logging it at error
+      // painted WHIP-start queue delay as a Mentra-Call exception.
+      if (method === "ready_nack") {
+        this.logger.warn(`[${packageName}] ${method}`, payload)
+      } else {
+        this.logger.error(`[${packageName}] ${method}`, payload)
+      }
       if (this.crashController) {
         // Only treat "exception" + "unhandledRejection" + "uncaught" as
         // crash signals. `console.error` calls also flow through the
@@ -504,6 +588,46 @@ export class MentraJSRouter {
    * payload's `type` field. Used by the UI_SEND interception path.
    * Returns null if the envelope isn't a valid bridge frame.
    */
+  /** One deadline per spawn covers a background that never connects and an init that never settles. */
+  private nextSessionId(packageName: string): string {
+    const sessionId = `${packageName}-${Date.now().toString(36)}-${(this.sessionSeq++).toString(36)}`
+    this.sessions.set(packageName, sessionId)
+    return sessionId
+  }
+
+  private armReadyDeadline(packageName: string): void {
+    this.clearReadyTimer(packageName)
+    this.readyTimers.set(
+      packageName,
+      this.timer.setTimeout(() => {
+        this.readyTimers.delete(packageName)
+        if (this.replacementConnects.has(packageName)) {
+          // No session yet to deliver to: show the UI, keep its frames held.
+          this.logger.warn(`${packageName} not connected ${BACKGROUND_READY_TIMEOUT_MS}ms after spawn; showing UI`)
+          this.uiRouter?.revealHeldUi(packageName)
+          return
+        }
+        this.logger.warn(`${packageName} not ready ${BACKGROUND_READY_TIMEOUT_MS}ms after spawn; opening UI`)
+        this.uiRouter?.backgroundReady(packageName)
+      }, BACKGROUND_READY_TIMEOUT_MS),
+    )
+  }
+
+  private markBackgroundReady(packageName: string, cause: "connect" | "ready"): void {
+    // After the deadline fired (or a duplicate READY) there is nothing left to open.
+    if (!this.readyTimers.has(packageName)) return
+    this.clearReadyTimer(packageName)
+    this.logger.log(`background ready for ${packageName}`, {cause})
+    this.uiRouter?.backgroundReady(packageName)
+  }
+
+  private clearReadyTimer(packageName: string): void {
+    const timer = this.readyTimers.get(packageName)
+    if (timer === undefined) return
+    this.timer.clearTimeout(timer)
+    this.readyTimers.delete(packageName)
+  }
+
   private peekBridgePayloadType(raw: string): {type: string; [k: string]: unknown} | null {
     try {
       const env = JSON.parse(raw) as {payload?: {type?: string}}
@@ -545,11 +669,8 @@ export class MentraJSRouter {
 
   /**
    * Push a `kind="bridge"` envelope into the named JSContext's
-   * `globalThis.__deliver`. Used both by the per-app `sendMessage`
-   * registered via {@link registerApp} and by ad-hoc callers (e.g.
-   * cloud-relayed stream-status responses route through
-   * `LocalMiniappRuntime.handleCloudMessage`, which then calls the
-   * `app.sendMessage(serialized)` registered above).
+   * `globalThis.__deliver`. Used by the per-app `sendMessage` registered via
+   * {@link registerApp} to deliver runtime responses and events locally.
    */
   private dispatchBridgeRaw(packageName: string, raw: string): void {
     void this.crust.mentraJsDispatchToJs(packageName, {kind: "bridge", raw})

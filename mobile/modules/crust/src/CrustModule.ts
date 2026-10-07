@@ -3,9 +3,13 @@ import {NativeModule, requireNativeModule} from "expo"
 import {CrustModuleEvents, InstalledApp} from "./Crust.types"
 
 declare class CrustModule extends NativeModule<CrustModuleEvents> {
+  /** True for the native iOS app running on an Apple Silicon Mac. */
+  readonly isIOSAppOnMac?: boolean
   PI: number
   hello(): string
   setValueAsync(value: string): Promise<void>
+  /** Android: copy the displayed view's window pixels to a temporary JPEG URI. */
+  captureMiniappPreview(viewTag: number): Promise<string>
   nativeHttpRequest(
     method: string,
     url: string,

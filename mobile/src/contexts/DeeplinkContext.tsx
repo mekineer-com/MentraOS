@@ -1,12 +1,21 @@
 import * as Linking from "expo-linking"
 import * as WebBrowser from "expo-web-browser"
-import {FC, ReactNode, createContext, useContext, useEffect} from "react"
+import {FC, ReactNode, createContext, useContext, useEffect, useRef} from "react"
 import {AppState, Platform} from "react-native"
 
 import {useSplashLoader} from "@/contexts/SplashLoaderProvider"
 import mentraAuth from "@/utils/auth/authClient"
-import {BgTimer} from "@mentra/engine"
-import { useNavigationStore } from "@/stores/navigation"
+import {BgTimer, glassesMicProbe, parseMicProbeParams} from "@mentra/engine"
+import {useNavigationStore} from "@/stores/navigation"
+
+/**
+ * adb / zsh often backslash-escapes `&` in a custom-scheme URL. That turns
+ * `?seconds=15&a2dp=none` into `?seconds=15\&a2dp=none`, which the URL parser
+ * reads as `seconds=15\`. Undo that before matching routes.
+ */
+function sanitizeDeeplinkUrl(url: string): string {
+  return url.replace(/\\&/g, "&").replace(/\\(?=$|[?#])/g, "")
+}
 
 /** Returns immediately if the app is already active, otherwise waits for it. */
 const waitForActive = (): Promise<void> => {
@@ -201,7 +210,9 @@ const deepLinkRoutes: DeepLinkRoute[] = [
       const query = new URLSearchParams(url.split("?")[1]?.split("#")[0] ?? "")
       const handoffCode = params.code ?? query.get("code")
       const handoffState = params.state ?? query.get("state")
-      if (handoffCode && handoffState && !url.includes("#")) {
+      // OAuth redirects may preserve an empty fragment (a trailing #). Query
+      // code/state identify the PKCE handoff independently of that fragment.
+      if (handoffCode && handoffState) {
         const res = await mentraAuth.completeOAuthHandoff({code: handoffCode, state: handoffState})
         try {
           WebBrowser.dismissBrowser()
@@ -213,10 +224,8 @@ const deepLinkRoutes: DeepLinkRoute[] = [
           nav.replace(`/auth/start?authError=oauth_failed`)
           return
         }
-        BgTimer.setTimeout(() => {
-          nav.setAnimation("none")
-          nav.replaceAll("/")
-        }, 100)
+        nav.setAnimation("none")
+        nav.replaceAll("/")
         return
       }
 
@@ -227,6 +236,23 @@ const deepLinkRoutes: DeepLinkRoute[] = [
         console.log("[LOGIN DEBUG] Error in auth callback:", authParams.error_code, authParams.error_description)
         // Navigate to login with the error code so login screen can show the message
         nav.replace(`/auth/start?authError=${authParams.error_code || authParams.error}`)
+        return
+      }
+
+      if (authParams?.type === "signup" && authParams.access_token) {
+        const res = await mentraAuth.completeSignupVerification(authParams.access_token)
+        try {
+          WebBrowser.dismissBrowser()
+        } catch {
+          // The confirmation link may have opened outside an in-app browser.
+        }
+        if (res.is_error()) {
+          console.error("Email verification sign-in failed:", res.error)
+          nav.replace("/auth/start?authError=invalid_grant")
+          return
+        }
+        nav.setAnimation("none")
+        nav.replaceAll("/")
         return
       }
 
@@ -355,6 +381,25 @@ const deepLinkRoutes: DeepLinkRoute[] = [
     requiresAuth: true,
   },
 
+  // Dev tooling: glasses LC3 microphone level probe (see engine GlassesMicProbe).
+  {
+    pattern: "/test/mic-probe",
+    handler: async (url: string, params: Record<string, string>) => {
+      const nav = useNavigationStore.getState()
+      const options = parseMicProbeParams(params)
+      const query = new URLSearchParams()
+      query.set("seconds", String(Math.round(options.durationMs / 1000)))
+      query.set("a2dp", options.a2dp)
+      if (options.a2dp === "tone") query.set("level", String(options.toneLevel ?? 0.2))
+      if (options.source) query.set("mic", options.source)
+      // Start here (after auth) so boot remounts of the screen cannot pin the
+      // glasses mic during login or leave an orphaned soak after go-home.
+      void glassesMicProbe.start(options)
+      nav.push(`/test/mic-probe?${query.toString()}` as any)
+    },
+    requiresAuth: true,
+  },
+
   // Search routes
   {
     pattern: "/search",
@@ -415,8 +460,8 @@ const DeeplinkContext = createContext<DeeplinkContextType>({} as DeeplinkContext
 export const useDeeplink = () => useContext(DeeplinkContext)
 
 export const DeeplinkProvider: FC<{children: ReactNode}> = ({children}) => {
-
   const {setSplashEnabled} = useSplashLoader()
+  const lastProcessed = useRef({url: null as string | null, time: 0})
   const nav = useNavigationStore.getState()
   const config = {
     scheme: "com.mentra",
@@ -447,13 +492,14 @@ export const DeeplinkProvider: FC<{children: ReactNode}> = ({children}) => {
   }
 
   useEffect(() => {
-    Linking.addEventListener("url", handleUrlRaw)
+    const subscription = Linking.addEventListener("url", handleUrlRaw)
     Linking.getInitialURL().then((url) => {
       console.log("@@@@@@@@@@@@@ INITIAL URL @@@@@@@@@@@@@@@", url)
       if (url) {
         processUrl(url, true)
       }
     })
+    return () => subscription.remove()
   }, [])
 
   /**
@@ -505,19 +551,17 @@ export const DeeplinkProvider: FC<{children: ReactNode}> = ({children}) => {
       }
     }
 
-    // Extract query parameters
+    // Extract query parameters. Trailing `\` is the leftover from an escaped `&`.
     url.searchParams.forEach((value, key) => {
-      params[key] = value
+      params[key] = value.replace(/\\+$/g, "")
     })
 
     return params
   }
 
-  let lastProcessedUrl: string | null = null
-  let lastProcessedTime = 0
-
   const processUrl = async (url: string, initial: boolean = false) => {
     try {
+      url = sanitizeDeeplinkUrl(url)
       // ignore expo-dev-deeplinks: (this was causing android to restart the app after hot-reloads twice)
       if (url.includes("expo-development-client")) {
         console.log("DEEPLINK: Ignoring expo-development-client URL")
@@ -531,12 +575,11 @@ export const DeeplinkProvider: FC<{children: ReactNode}> = ({children}) => {
       // call happens >2s later (1s initial delay + init time + 1s DEEPLINK_DELAY)
       // so it naturally falls outside the dedup window.
       const now = Date.now()
-      if (!initial && url === lastProcessedUrl && now - lastProcessedTime < 3000) {
+      if (!initial && url === lastProcessed.current.url && now - lastProcessed.current.time < 3000) {
         console.log("DEEPLINK: Ignoring duplicate URL")
         return
       }
-      lastProcessedUrl = url
-      lastProcessedTime = now
+      lastProcessed.current = {url, time: now}
 
       // For initial URLs (cold start), set the pending route BEFORE the delay.
       // This prevents a race condition where index.tsx init completes during the
@@ -597,14 +640,13 @@ export const DeeplinkProvider: FC<{children: ReactNode}> = ({children}) => {
         console.log("@@@@@@@@@@@@@ PARAMS @@@@@@@@@@@@@@@", params)
         console.log("@@@@@@@@@@@@@ URL @@@@@@@@@@@@@@@", url)
         setSplashEnabled(true)
-        BgTimer.setTimeout(async () => {
-          await matchedRoute.handler(url, params)
-          BgTimer.setTimeout(() => {
-            setSplashEnabled(false)
-          }, 2500)
-        }, 100)
+        // OAuth must start its one-time exchange while the browser is still
+        // presented. A JS timer can be suspended during that transition.
+        await matchedRoute.handler(url, params)
       } catch (error) {
         console.warn("Route handler failed, router may not be ready:", error)
+      } finally {
+        setSplashEnabled(false)
       }
     } catch (error) {
       console.error("Error handling deep link:", error)
