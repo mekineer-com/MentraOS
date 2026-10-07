@@ -6,14 +6,13 @@ import * as Device from "expo-device"
 import {showAlert} from "@/contexts/ModalContext"
 import {translate} from "@/i18n"
 import {engine} from "@mentra/engine"
-import {appRegistry, localMiniappRuntime} from "@mentra/engine-host-internal"
+import {appRegistry, localMiniappRuntime, miniappLauncher} from "@mentra/engine-host-internal"
 import {storage} from "@/utils/storage/storage"
 import {deploymentStore, useDeployment} from "@/services/deployment"
 import {DEFAULT_OPENALMA_ADDRESS, IRIS_PACKAGE, OPENALMA_ADDRESS_KEY, OPENALMA_HOST_KEY,
   OPENALMA_HOST_PACKAGE, isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
-const IRIS_PROFILE_KEY = "openalma.connection-profile"
-const IRIS_PROFILE_CLEARED_KEY = "openalma.connection-profile-cleared"
+const IRIS_JOURNAL_KEY = "openalma:gemini-session-v1"
 const IRIS_INSTALLED_OFFER_KEY = "openalma.installed-offer"
 
 export function savedOpenAlmaAddress(): string {
@@ -74,24 +73,33 @@ export function IrisUpdatePrompt() {
         let manifest: {packageName?: unknown; version?: unknown}
         let setup
         try {
-          const [manifestResponse, profileResponse] = await Promise.all([
+          const [manifestResponse, offerResponse] = await Promise.all([
             fetch(`${sourceUrl}/miniapp.json`, {signal: controller.signal}),
-            fetch(`${sourceUrl}/openalma-profile.json`, {signal: controller.signal}),
+            fetch(`${sourceUrl}/openalma-offer.json`, {signal: controller.signal}),
           ])
-          if (!manifestResponse.ok || !profileResponse.ok) {
+          if (!manifestResponse.ok || !offerResponse.ok) {
             offered.current = null
             return
           }
           manifest = await manifestResponse.json()
-          setup = parseIrisSetupOffer(await profileResponse.json())
-          if (!setup || setup.profile.deviceSessionId !== deviceSessionId) return
+          setup = parseIrisSetupOffer(await offerResponse.json())
+          if (!setup || setup.deviceSessionId !== deviceSessionId) return
+          const statusResponse = await fetch(
+            `${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
+            {signal: controller.signal},
+          )
+          if (!statusResponse.ok || (await statusResponse.json()).active !== false) return
         } catch {
           offered.current = null
           return
         } finally {
           clearTimeout(timeout)
         }
-        const persistedOffer = await localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY)
+        const [persistedOffer, journal] = await Promise.all([
+          localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY),
+          localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_JOURNAL_KEY),
+        ])
+        if (journal) return
         const completing = installedOffer.current === setup.offerId || persistedOffer === setup.offerId
         if (deploymentStore.getActive().kind !== "consumer") return
         if (!completing && !isIrisOffer(manifest, setup.offerId, offered.current)) return
@@ -101,13 +109,6 @@ export function IrisUpdatePrompt() {
           try {
             const result = await appRegistry.installFromJsonUrl(sourceUrl)
             if (result.is_error()) throw result.error
-            const [existingProfile, profileCleared] = await Promise.all([
-              localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY),
-              localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_CLEARED_KEY),
-            ])
-            if (existingProfile == null && profileCleared !== "1") {
-              await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_PROFILE_KEY, JSON.stringify(setup.profile))
-            }
             await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY, setup.offerId)
             installedOffer.current = setup.offerId
           } catch (error) {
@@ -121,6 +122,20 @@ export function IrisUpdatePrompt() {
         }
 
         try {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 2000)
+          try {
+            const [statusResponse, journal] = await Promise.all([
+              fetch(`${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
+                {signal: controller.signal}),
+              localMiniappRuntime.getSimpleStorage(IRIS_PACKAGE, IRIS_JOURNAL_KEY),
+            ])
+            if (journal || !statusResponse.ok || (await statusResponse.json()).active !== false) return
+          } finally {
+            clearTimeout(timeout)
+          }
+          await miniappLauncher.stop(IRIS_PACKAGE)
+          await miniappLauncher.ensureConnected(IRIS_PACKAGE)
           await engine.miniapps.refresh()
           await engine.miniapps.setForeground(IRIS_PACKAGE)
           const acknowledgement = await fetch(`${sourceUrl}/__mentra_release/installed`, {

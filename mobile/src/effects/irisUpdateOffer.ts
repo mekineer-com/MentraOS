@@ -15,23 +15,12 @@ export function openAlmaAddresses(value: string): {baseUrl: string; installerUrl
   return {baseUrl, installerUrl: `http://${match[2]}:6789`}
 }
 
-type IrisProfile = {
-  baseUrl: string
-  bearer: string
-  userId: string
-  soulId: string
-  deviceSessionId: string
-}
-
-export function parseIrisSetupOffer(value: unknown): {offerId: string; profile: IrisProfile} | null {
+export function parseIrisSetupOffer(value: unknown): {offerId: string; deviceSessionId: string} | null {
   if (!value || typeof value !== "object") return null
-  const offer = value as {offerId?: unknown; profile?: unknown}
-  if (typeof offer.offerId !== "string" || !offer.offerId || !offer.profile || typeof offer.profile !== "object") return null
-  const profile = offer.profile as Record<keyof IrisProfile, unknown>
-  if (!["baseUrl", "bearer", "userId", "soulId", "deviceSessionId"].every(
-    (key) => typeof profile[key as keyof IrisProfile] === "string" && String(profile[key as keyof IrisProfile]).trim(),
-  )) return null
-  return {offerId: offer.offerId, profile: offer.profile as IrisProfile}
+  const offer = value as {offerId?: unknown; deviceSessionId?: unknown}
+  if (typeof offer.offerId !== "string" || !offer.offerId.trim() ||
+      typeof offer.deviceSessionId !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(offer.deviceSessionId)) return null
+  return {offerId: offer.offerId, deviceSessionId: offer.deviceSessionId}
 }
 
 export function isIrisOffer(
