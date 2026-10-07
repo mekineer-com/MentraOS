@@ -133,17 +133,19 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   let firstAckSignal: AbortSignal | undefined
   const deviceSessionId = "android-test-phone"
   let acknowledgements = 0
+  let active = false
+  let offerId = "offer-1"
   let activate!: () => void
   ;(miniappLauncher.ensureConnected as jest.Mock).mockReturnValueOnce(new Promise<void>((resolve) => {activate = resolve}))
   ;(appRegistry.installFromJsonUrl as jest.Mock).mockResolvedValue({is_error: () => false})
   global.fetch = jest.fn(async (url: string, init?: RequestInit) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active, starting: active})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) {
       return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     }
     if (url.endsWith("/openalma-offer.json")) {
-      return {ok: true, json: async () => ({offerId: "offer-1", deviceSessionId: deviceSessionId})}
+      return {ok: true, json: async () => ({offerId, deviceSessionId: deviceSessionId})}
     }
     if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     acknowledgements += 1
@@ -168,6 +170,9 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     title: "irisUpdate:completionFailedTitle",
   })))
   const onAppState = (AppState.addEventListener as jest.Mock).mock.calls[0][1]
+  active = true
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async (_package, key) =>
+    key === "openalma:gemini-session-v1" ? "new sitting journal" : null)
   onAppState("active")
   await waitFor(() => expect(acknowledgements).toBe(2))
   expect(showAlert).toHaveBeenCalledTimes(1)
@@ -197,7 +202,13 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     "com.openalma.mentra", "openalma.connection-profile", expect.anything(),
   )
   expect(miniappLauncher.ensureConnected).toHaveBeenCalledTimes(1)
+  expect(miniappLauncher.stop).toHaveBeenCalledTimes(1)
   expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(1)
+  expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => url.includes("/status?"))).toHaveLength(2)
+  offerId = "offer-2"
+  await act(async () => {onAppState("active"); await new Promise((resolve) => setTimeout(resolve, 0))})
+  expect(acknowledgements).toBe(3)
+  expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
   view.unmount()
   timers.mockRestore()
 })
@@ -314,10 +325,11 @@ test("does not claim an installer without an automatic offer", async () => {
 
 test("resumes acknowledgement from a persisted installed offer without reinstalling", async () => {
   const deviceSessionId = "android-test-phone"
+  let active = true
   ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async (_package, key) =>
     key === "openalma.installed-offer" ? "offer-4" : null)
   global.fetch = jest.fn(async (url: string) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active, starting: false})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "offer-4", deviceSessionId: deviceSessionId})}
@@ -326,6 +338,13 @@ test("resumes acknowledgement from a persisted installed offer without reinstall
   }) as unknown as typeof fetch
 
   const view = render(createElement(IrisUpdatePrompt))
+  await act(async () => {await new Promise((resolve) => setTimeout(resolve, 0))})
+  expect(miniappLauncher.stop).not.toHaveBeenCalled()
+  expect(engine.miniapps.setForeground).not.toHaveBeenCalled()
+  expect((global.fetch as jest.Mock).mock.calls.some(([url]) => url.endsWith("/__mentra_release/installed"))).toBe(false)
+  active = false
+  const onAppState = (AppState.addEventListener as jest.Mock).mock.calls[0][1]
+  onAppState("active")
   await waitFor(() => expect(engine.miniapps.setForeground).toHaveBeenCalledWith("com.openalma.mentra"))
 
   expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()

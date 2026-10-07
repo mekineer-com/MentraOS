@@ -84,13 +84,15 @@ export function IrisUpdatePrompt() {
           manifest = await manifestResponse.json()
           setup = parseIrisSetupOffer(await offerResponse.json())
           if (!setup || setup.deviceSessionId !== deviceSessionId) return
-          const statusResponse = await fetch(
-            `${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
-            {signal: controller.signal},
-          )
-          if (!statusResponse.ok) return
-          const status = await statusResponse.json()
-          if (status.active !== false || status.starting !== false) return
+          if (activatedOffer.current !== setup.offerId) {
+            const statusResponse = await fetch(
+              `${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
+              {signal: controller.signal},
+            )
+            if (!statusResponse.ok) return
+            const status = await statusResponse.json()
+            if (status.active !== false || status.starting !== false) return
+          }
         } catch {
           return
         } finally {
@@ -118,20 +120,20 @@ export function IrisUpdatePrompt() {
         }
 
         try {
-          const controller = new AbortController()
-          const timeout = setTimeout(() => controller.abort(), 2000)
-          try {
-            const statusResponse = await fetch(
-              `${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
-              {signal: controller.signal},
-            )
-            if (!statusResponse.ok) return
-            const status = await statusResponse.json()
-            if (status.active !== false || status.starting !== false) return
-          } finally {
-            clearTimeout(timeout)
-          }
           if (activatedOffer.current !== setup.offerId) {
+            const controller = new AbortController()
+            const timeout = setTimeout(() => controller.abort(), 2000)
+            try {
+              const statusResponse = await fetch(
+                `${baseUrl}/integration/mentra/status?device_session_id=${encodeURIComponent(deviceSessionId)}`,
+                {signal: controller.signal},
+              )
+              if (!statusResponse.ok) return
+              const status = await statusResponse.json()
+              if (status.active !== false || status.starting !== false) return
+            } finally {
+              clearTimeout(timeout)
+            }
             await miniappLauncher.stop(IRIS_PACKAGE)
             await miniappLauncher.ensureConnected(IRIS_PACKAGE)
             await engine.miniapps.refresh()
