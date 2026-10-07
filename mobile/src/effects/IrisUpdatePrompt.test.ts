@@ -3,6 +3,8 @@ import {AppState} from "react-native"
 import {act, render, waitFor} from "@testing-library/react-native"
 
 import {showAlert} from "@/contexts/ModalContext"
+import {TextField} from "@/components/ignite"
+import {storage} from "@/utils/storage/storage"
 import {engine} from "@mentra/engine"
 import {appRegistry, localMiniappRuntime, miniappLauncher} from "@mentra/engine-host-internal"
 import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
@@ -40,7 +42,7 @@ jest.mock("@/components/ui/Spacer", () => ({Spacer: () => null}))
 jest.mock("@/components/ui/Group", () => ({Group: require("react-native").View}))
 jest.mock("@/components/ignite", () => ({
   Screen: require("react-native").View, Icon: () => null,
-  TextField: ({helper}: {helper: string}) => require("react").createElement(require("react-native").Text, null, helper),
+  TextField: jest.fn(({helper}: {helper: string}) => require("react").createElement(require("react-native").Text, null, helper)),
 }))
 jest.mock("@/contexts/ThemeContext", () => ({useAppTheme: () => ({theme: {
   spacing: {s2: 2, s6: 6, s10: 10}, colors: {secondary_foreground: "white"},
@@ -68,6 +70,12 @@ test("opening fork Settings shows an unreachable default without editing the add
   global.fetch = jest.fn(async () => {throw new Error("Network unavailable")}) as unknown as typeof fetch
   const view = render(createElement(MainSettingsPage))
   await waitFor(() => expect(view.getByText("Network unavailable")).toBeTruthy())
+  expect((TextField as jest.Mock).mock.calls.every(([props]) =>
+    props.labelTx === "irisUpdate:serverAddress" && props.value === "http://10.77.0.1")).toBe(true)
+  expect(storage.load).toHaveBeenCalledTimes(1)
+  expect(storage.load).toHaveBeenCalledWith("openalma.server-address")
+  expect(storage.save).toHaveBeenCalledTimes(1)
+  expect(storage.save).toHaveBeenCalledWith("openalma.server-address", "http://10.77.0.1")
   view.unmount()
 })
 
@@ -118,14 +126,21 @@ test("derives one installer address without losing IPv6 or hostnames", () => {
     ["http://10.77.0.1:8099", "http://10.77.0.1:6789"],
     ["https://[fd00::1]:8099", "http://[fd00::1]:6789"],
     ["https://openalma.example", "http://openalma.example:6789"],
+    ["http://100.64.0.1:8099", "http://100.64.0.1:6789"],
+    ["http://127.0.0.1:8099", "http://127.0.0.1:6789"],
+    ["https://203.0.113.1:8099", "http://203.0.113.1:6789"],
   ]) expect(openAlmaAddresses(baseUrl)).toEqual({baseUrl, installerUrl})
-  expect(() => openAlmaAddresses("http://user:password@example")).toThrow()
+  for (const invalid of ["http://user:password@example", "ftp://openalma.example",
+    "http://openalma.example:0", "http://openalma.example:65536", "http://openalma.example/path"]) {
+    expect(() => openAlmaAddresses(invalid)).toThrow()
+  }
 })
 
 test("accepts only a targeted offer", () => {
   const deviceSessionId = "android-test-phone"
   expect(parseIrisSetupOffer({offerId: "offer-1", deviceSessionId: deviceSessionId})).toEqual({offerId: "offer-1", deviceSessionId: deviceSessionId})
   expect(parseIrisSetupOffer({offerId: "offer-1", deviceSessionId: "bad id"})).toBeNull()
+  expect(parseIrisSetupOffer({offerId: "offer-1", profile: {deviceSessionId}})).toBeNull()
 })
 
 test("retries acknowledgement without reinstalling Iris", async () => {
@@ -205,6 +220,14 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   expect(miniappLauncher.stop).toHaveBeenCalledTimes(1)
   expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(1)
   expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => url.includes("/status?"))).toHaveLength(2)
+  for (const [url, init] of (global.fetch as jest.Mock).mock.calls) {
+    expect(init.headers ?? {}).toEqual(url.endsWith("/host/seen") || url.endsWith("/__mentra_release/installed")
+      ? {"Content-Type": "application/json"} : {})
+    if (url.endsWith("/host/seen")) expect(JSON.parse(init.body)).toEqual({
+      user_id: "Test User", device_session_id: deviceSessionId,
+      host_package: "com.mentra.mentra.openalma", host_version: "3.2.0", default_name: "Test Phone",
+    })
+  }
   offerId = "offer-2"
   await act(async () => {onAppState("active"); await new Promise((resolve) => setTimeout(resolve, 0))})
   expect(acknowledgements).toBe(3)
@@ -304,6 +327,14 @@ test("reports its own identity before Iris exists and ignores another installati
   expect(JSON.parse(report[1].body)).toMatchObject({
     device_session_id: "android-test-phone", default_name: "Test Phone",
   })
+  expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledTimes(1)
+  expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledWith(
+    "com.openalma.mentra", "openalma.host", JSON.stringify({
+      host_package: "com.mentra.mentra.openalma", host_version: "3.2.0", deviceSessionId: "android-test-phone",
+    }),
+  )
+  expect((localMiniappRuntime.setSimpleStorage as jest.Mock).mock.invocationCallOrder[0])
+    .toBeLessThan((global.fetch as jest.Mock).mock.invocationCallOrder[0])
   expect(localMiniappRuntime.getSimpleStorage).not.toHaveBeenCalled()
   view.unmount()
 })
