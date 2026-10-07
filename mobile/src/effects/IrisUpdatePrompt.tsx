@@ -57,6 +57,8 @@ export function IrisUpdatePrompt() {
   const checking = useRef(false)
   const offered = useRef<string | null>(null)
   const installedOffer = useRef<string | null>(null)
+  const activatedOffer = useRef<string | null>(null)
+  const completionError = useRef<string | null>(null)
 
   useEffect(() => {
     if (Application.applicationId !== OPENALMA_HOST_PACKAGE || activeDeployment.kind !== "consumer") return
@@ -78,7 +80,6 @@ export function IrisUpdatePrompt() {
             fetch(`${sourceUrl}/openalma-offer.json`, {signal: controller.signal}),
           ])
           if (!manifestResponse.ok || !offerResponse.ok) {
-            offered.current = null
             return
           }
           manifest = await manifestResponse.json()
@@ -90,7 +91,6 @@ export function IrisUpdatePrompt() {
           )
           if (!statusResponse.ok || (await statusResponse.json()).active !== false) return
         } catch {
-          offered.current = null
           return
         } finally {
           clearTimeout(timeout)
@@ -112,7 +112,6 @@ export function IrisUpdatePrompt() {
             await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY, setup.offerId)
             installedOffer.current = setup.offerId
           } catch (error) {
-            offered.current = null
             await showAlert({
               title: translate("irisUpdate:failedTitle"),
               message: error instanceof Error ? error.message : String(error),
@@ -134,10 +133,13 @@ export function IrisUpdatePrompt() {
           } finally {
             clearTimeout(timeout)
           }
-          await miniappLauncher.stop(IRIS_PACKAGE)
-          await miniappLauncher.ensureConnected(IRIS_PACKAGE)
-          await engine.miniapps.refresh()
-          await engine.miniapps.setForeground(IRIS_PACKAGE)
+          if (activatedOffer.current !== setup.offerId) {
+            await miniappLauncher.stop(IRIS_PACKAGE)
+            await miniappLauncher.ensureConnected(IRIS_PACKAGE)
+            await engine.miniapps.refresh()
+            await engine.miniapps.setForeground(IRIS_PACKAGE)
+            activatedOffer.current = setup.offerId
+          }
           const acknowledgement = await fetch(`${sourceUrl}/__mentra_release/installed`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -147,14 +149,16 @@ export function IrisUpdatePrompt() {
           await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, IRIS_INSTALLED_OFFER_KEY, "")
           installedOffer.current = null
         } catch (error) {
-          await showAlert({
-            title: translate("irisUpdate:completionFailedTitle"),
-            message: error instanceof Error ? error.message : String(error),
-          })
+          if (completionError.current !== setup.offerId) {
+            completionError.current = setup.offerId
+            await showAlert({
+              title: translate("irisUpdate:completionFailedTitle"),
+              message: error instanceof Error ? error.message : String(error),
+            })
+          }
         }
       } catch {
         // An unavailable server/offer is normal for this foreground probe.
-        offered.current = null
       } finally {
         checking.current = false
       }

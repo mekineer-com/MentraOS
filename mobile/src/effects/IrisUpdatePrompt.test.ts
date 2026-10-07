@@ -1,11 +1,12 @@
 import {createElement} from "react"
 import {AppState} from "react-native"
-import {render, waitFor} from "@testing-library/react-native"
+import {act, render, waitFor} from "@testing-library/react-native"
 
 import {showAlert} from "@/contexts/ModalContext"
 import {engine} from "@mentra/engine"
 import {appRegistry, localMiniappRuntime, miniappLauncher} from "@mentra/engine-host-internal"
 import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
+import MainSettingsPage from "@/app/miniapps/settings/main"
 import {isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
 let mockApplicationId = "com.mentra.mentra.openalma"
@@ -22,12 +23,30 @@ jest.mock("expo-application", () => ({
   getAndroidId: () => "test-phone",
 }))
 jest.mock("expo-device", () => ({deviceName: "Test Phone", modelName: "Test Model"}))
-jest.mock("@/utils/storage/storage", () => ({storage: {load: jest.fn(() => ({is_ok: () => false}))}}))
+jest.mock("@/utils/storage/storage", () => ({storage: {
+  load: jest.fn(() => ({is_ok: () => false})), save: jest.fn(() => ({is_error: () => false})),
+}}))
 jest.mock("@/contexts/ModalContext", () => ({showAlert: jest.fn()}))
 jest.mock("@/i18n", () => ({translate: (key: string) => key}))
 jest.mock("@mentra/engine", () => ({
   engine: {miniapps: {refresh: jest.fn(), setForeground: jest.fn()}},
+  SETTINGS: {debug_mode: {key: "debug"}, super_mode: {key: "super"}, appearance_menu_enabled: {key: "appearance"}},
+  useSetting: () => [false],
 }))
+jest.mock("@/components/dev/VersionInfo", () => ({VersionInfo: () => null}))
+jest.mock("@/components/settings/DeviceSettingsSection", () => ({DeviceSettingsSection: () => null}))
+jest.mock("@/components/ui/RouteButton", () => ({RouteButton: () => null}))
+jest.mock("@/components/ui/Spacer", () => ({Spacer: () => null}))
+jest.mock("@/components/ui/Group", () => ({Group: require("react-native").View}))
+jest.mock("@/components/ignite", () => ({
+  Screen: require("react-native").View, Icon: () => null,
+  TextField: ({helper}: {helper: string}) => require("react").createElement(require("react-native").Text, null, helper),
+}))
+jest.mock("@/contexts/ThemeContext", () => ({useAppTheme: () => ({theme: {
+  spacing: {s2: 2, s6: 6, s10: 10}, colors: {secondary_foreground: "white"},
+}})}))
+jest.mock("@/stores/navigation", () => ({useNavigationStore: {getState: () => ({push: jest.fn()})}}))
+jest.mock("@/stores/capsule", () => ({useRegisterCapsule: jest.fn()}))
 jest.mock("@mentra/engine-host-internal", () => ({
   appRegistry: {
      installFromJsonUrl: jest.fn(),
@@ -43,6 +62,13 @@ beforeEach(() => {
   mockDeploymentKind = "consumer"
   Object.defineProperty(AppState, "currentState", {configurable: true, value: "active"})
   global.fetch = jest.fn()
+})
+
+test("opening fork Settings shows an unreachable default without editing the address", async () => {
+  global.fetch = jest.fn(async () => {throw new Error("Network unavailable")}) as unknown as typeof fetch
+  const view = render(createElement(MainSettingsPage))
+  await waitFor(() => expect(view.getByText("Network unavailable")).toBeTruthy())
+  view.unmount()
 })
 
 test("does nothing in the stock Mentra build", () => {
@@ -119,7 +145,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     }
     if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     acknowledgements += 1
-    return {ok: acknowledgements > 1, status: 503}
+    return {ok: acknowledgements > 2, status: 503}
   }) as unknown as typeof fetch
 
   const view = render(createElement(IrisUpdatePrompt))
@@ -133,11 +159,14 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   const onAppState = (AppState.addEventListener as jest.Mock).mock.calls[0][1]
   onAppState("active")
   await waitFor(() => expect(acknowledgements).toBe(2))
+  expect(showAlert).toHaveBeenCalledTimes(1)
+  onAppState("active")
+  await waitFor(() => expect(acknowledgements).toBe(3))
 
   expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
   expect(
     (global.fetch as jest.Mock).mock.calls.filter(([url]) => url.endsWith("/integration/mentra/host/seen")),
-  ).toHaveLength(2)
+  ).toHaveLength(3)
   expect(global.fetch).toHaveBeenCalledWith(
     "http://10.77.0.1/integration/mentra/host/seen",
     expect.objectContaining({
@@ -155,9 +184,38 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   expect(localMiniappRuntime.setSimpleStorage).not.toHaveBeenCalledWith(
     "com.openalma.mentra", "openalma.connection-profile", expect.anything(),
   )
-  expect(miniappLauncher.ensureConnected).toHaveBeenCalledTimes(2)
-  expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(2)
+  expect(miniappLauncher.ensureConnected).toHaveBeenCalledTimes(1)
+  expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(1)
   view.unmount()
+})
+
+test("foreground ticks do not repeat a failed install or its alert", async () => {
+  const interval = jest.spyOn(global, "setInterval")
+  let available = true
+  ;(appRegistry.installFromJsonUrl as jest.Mock).mockResolvedValue({is_error: () => true, error: new Error("ZIP failed")})
+  global.fetch = jest.fn(async (url: string) => {
+    if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
+    if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
+    if (url.endsWith("/openalma-offer.json")) return {ok: available, json: async () => ({offerId: "failed", deviceSessionId: "android-test-phone"})}
+    if (url.includes("/status?")) return {ok: true, json: async () => ({active: false})}
+    return {ok: true}
+  }) as unknown as typeof fetch
+  const view = render(createElement(IrisUpdatePrompt))
+  try {
+    await waitFor(() => expect(showAlert).toHaveBeenCalledTimes(1))
+    const tick = interval.mock.calls[0][0] as () => void
+    available = false
+    await act(async () => {tick(); await new Promise((resolve) => setTimeout(resolve, 0))})
+    available = true
+    for (let n = 0; n < 3; n++) {
+      await act(async () => {tick(); await new Promise((resolve) => setTimeout(resolve, 0))})
+    }
+    expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
+    expect(showAlert).toHaveBeenCalledTimes(1)
+  } finally {
+    view.unmount()
+    interval.mockRestore()
+  }
 })
 
 test.each(["active", "journal", "active-after-install"])("does not replace Iris with %s work", async (work) => {

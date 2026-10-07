@@ -11,7 +11,7 @@ import {useAppTheme} from "@/contexts/ThemeContext"
 import {useNavigationStore} from "@/stores/navigation"
 import {translate} from "@/i18n"
 import {SETTINGS, useSetting} from "@mentra/engine"
-import {useRef, useState} from "react"
+import {useEffect, useRef, useState} from "react"
 import {useRegisterCapsule} from "@/stores/capsule"
 import * as Application from "expo-application"
 import {reportOpenAlmaHost, savedOpenAlmaAddress} from "@/effects/IrisUpdatePrompt"
@@ -43,6 +43,9 @@ export default function MainSettingsPage() {
       setAddressPending(false)
     }
   }
+  useEffect(() => {
+    if (Application.applicationId === OPENALMA_HOST_PACKAGE) void saveAddress()
+  }, [])
 
   useRegisterCapsule({
     packageName: "com.mentra.settings",
