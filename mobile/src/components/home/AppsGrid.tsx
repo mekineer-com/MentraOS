@@ -38,6 +38,7 @@ import {SETTINGS, useSetting} from "@mentra/engine"
 import {storage} from "@/utils/storage"
 import {useNavigationStore} from "@/stores/navigation"
 import {setMiniappOpeningAnimation} from "@/stores/miniappLaunch"
+import {useOpenAlmaHostUpdate} from "@/services/openAlmaHostUpdate"
 import {translate} from "@/i18n"
 import GlassView from "@/components/ui/GlassView"
 import {showAlert} from "@/contexts/ModalContext"
@@ -292,6 +293,7 @@ export function AppsGrid({
   skeletonPulse = true,
 }: AppsGridProps) {
   const {themed, theme} = useAppTheme()
+  const hostUpdateAvailable = useOpenAlmaHostUpdate((state) => state.release !== null)
 
   const startApplet = useStart()
   const stopApplet = useStop()
@@ -883,6 +885,7 @@ export function AppsGrid({
       if (item.packageName.startsWith("@empty")) {
         return <View className="flex-1" />
       }
+      const hasHostUpdate = item.packageName === "com.mentra.settings" && hostUpdateAvailable
       return (
         <Pressable
           ref={(ref) => {
@@ -890,6 +893,7 @@ export function AppsGrid({
           }}
           accessibilityRole="button"
           accessibilityLabel={item.name}
+          accessibilityHint={hasHostUpdate ? translate("mentraUpdate:available") : undefined}
           testID={`${showAllApps ? "allApps" : "home"}.miniapp.${item.packageName}`}
           onAccessibilityTap={() => {
             void handlePress(item)
@@ -914,7 +918,12 @@ export function AppsGrid({
           }}
           style={({pressed}) => ({opacity: pressed ? 0.7 : 1})}>
           <AppIcon app={item} className="w-16 h-16" instant />
-          <View className="w-full h-9 my-1 items-center justify-start">
+          <View
+            className={
+              hasHostUpdate
+                ? "w-full h-9 my-1 flex-row items-start justify-center"
+                : "w-full h-9 my-1 items-center justify-start"
+            }>
             <Text
               className={`text-foreground text-center mt-1 text-[12px] shrink ${
                 item.compatibility?.isCompatible ? "" : "opacity-15"
@@ -928,11 +937,19 @@ export function AppsGrid({
               ellipsizeMode="tail"
               text={item.name}
             />
+            {hasHostUpdate && (
+              <Text
+                text="!"
+                className="mt-1 ml-1 text-[12px] font-bold"
+                style={{color: theme.colors.destructive}}
+                accessible={false}
+              />
+            )}
           </View>
         </Pressable>
       )
     },
-    [handlePress, showAllApps, showPopover],
+    [handlePress, showAllApps, showPopover, hostUpdateAvailable, theme.colors.destructive],
   )
 
   // Non-gated path (home grid): unchanged — plain skeleton while showPlaceholders,

@@ -2,7 +2,8 @@ import {Platform, View} from "react-native"
 import {ScrollView} from "react-native-gesture-handler"
 
 import {VersionInfo} from "@/components/dev/VersionInfo"
-import {Icon, Screen, TextField} from "@/components/ignite"
+import {Icon, Screen} from "@/components/ignite"
+import {OpenAlmaAddressEditor} from "@/components/settings/OpenAlmaAddressEditor"
 import {DeviceSettingsSection} from "@/components/settings/DeviceSettingsSection"
 import {Group} from "@/components/ui/Group"
 import {RouteButton} from "@/components/ui/RouteButton"
@@ -11,12 +12,12 @@ import {useAppTheme} from "@/contexts/ThemeContext"
 import {useNavigationStore} from "@/stores/navigation"
 import {translate} from "@/i18n"
 import {SETTINGS, useSetting} from "@mentra/engine"
-import {useEffect, useRef, useState} from "react"
+import {useRef} from "react"
 import {useRegisterCapsule} from "@/stores/capsule"
 import * as Application from "expo-application"
-import {reportOpenAlmaHost, savedOpenAlmaAddress} from "@/effects/IrisUpdatePrompt"
-import {OPENALMA_ADDRESS_KEY, OPENALMA_HOST_PACKAGE, openAlmaAddresses} from "@/effects/irisUpdateOffer"
-import {storage} from "@/utils/storage/storage"
+import {OPENALMA_HOST_PACKAGE} from "@/effects/irisUpdateOffer"
+import {openOpenAlmaHostUpdate, useOpenAlmaHostUpdate} from "@/services/openAlmaHostUpdate"
+import {showAlert} from "@/contexts/ModalContext"
 
 export default function MainSettingsPage() {
   const {theme} = useAppTheme()
@@ -25,27 +26,15 @@ export default function MainSettingsPage() {
   const [superMode] = useSetting(SETTINGS.super_mode.key)
   const [appearanceMenuEnabled] = useSetting(SETTINGS.appearance_menu_enabled.key)
   const viewShotRef = useRef<View>(null)
-  const [openAlmaAddress, setOpenAlmaAddress] = useState(savedOpenAlmaAddress)
-  const [addressPending, setAddressPending] = useState(false)
-  const [addressError, setAddressError] = useState<string | null>(null)
-  const saveAddress = async () => {
-    setAddressPending(true)
-    setAddressError(null)
+  const hostRelease = useOpenAlmaHostUpdate((state) => state.release)
+  const updateHost = async () => {
     try {
-      const {baseUrl} = openAlmaAddresses(openAlmaAddress)
-      const saved = storage.save(OPENALMA_ADDRESS_KEY, baseUrl)
-      if (saved.is_error()) throw saved.error
-      setOpenAlmaAddress(baseUrl)
-      await reportOpenAlmaHost(baseUrl)
+      await openOpenAlmaHostUpdate()
     } catch (error) {
-      setAddressError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setAddressPending(false)
+      await showAlert({title: translate("mentraUpdate:failedTitle"),
+        message: error instanceof Error ? error.message : String(error)})
     }
   }
-  useEffect(() => {
-    if (Application.applicationId === OPENALMA_HOST_PACKAGE) void saveAddress()
-  }, [])
 
   useRegisterCapsule({
     packageName: "com.mentra.settings",
@@ -85,11 +74,12 @@ export default function MainSettingsPage() {
 
           <Group title={translate("account:appSettings")}>
             {Application.applicationId === OPENALMA_HOST_PACKAGE && (
-              <TextField labelTx="irisUpdate:serverAddress" value={openAlmaAddress}
-                onChangeText={setOpenAlmaAddress} onEndEditing={() => void saveAddress()}
-                autoCapitalize="none" autoCorrect={false} returnKeyType="done"
-                editable={!addressPending} status={addressError ? "error" : undefined}
-                helper={addressError ?? "http://10.77.0.1"} />
+              <OpenAlmaAddressEditor />
+            )}
+            {Application.applicationId === OPENALMA_HOST_PACKAGE && hostRelease && (
+              <RouteButton label={translate("mentraUpdate:update")} text={hostRelease.version}
+                icon={<Icon name="download" size={24} color={theme.colors.secondary_foreground} />}
+                onPress={() => void updateHost()} />
             )}
             {appearanceMenuEnabled && (
               <RouteButton

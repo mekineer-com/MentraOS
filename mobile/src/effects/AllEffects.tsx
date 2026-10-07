@@ -1,6 +1,7 @@
 import {GalleryModeSync} from "@/effects/GalleryModeSync"
 import {MemoryWarningMonitor} from "@/effects/MemoryWarningMonitor"
 import {IrisUpdatePrompt} from "@/effects/IrisUpdatePrompt"
+import {OpenAlmaHostUpdateChecker} from "@/effects/OpenAlmaHostUpdateChecker"
 import {MtkUpdateAlert} from "@/effects/MtkUpdateAlert"
 import {Reconnect} from "@/effects/Reconnect"
 import {ConsoleLogger} from "@/utils/dev/console"
@@ -44,6 +45,7 @@ export const AllEffects = () => {
           <PhoneWifiOverlay />
           <MemoryWarningMonitor />
           <IrisUpdatePrompt />
+          <OpenAlmaHostUpdateChecker />
         </>
       )}
     </>

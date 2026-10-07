@@ -7,6 +7,7 @@ import MaskedView from "@react-native-masked-view/masked-view"
 import {CustomBackground} from "@/components/home/CustomBackground"
 import {AppsGrid} from "@/components/home/AppsGrid"
 import {PairGlassesCard} from "@/components/home/PairGlassesCard"
+import {FirstConnectionBanner} from "@/components/home/FirstConnectionBanner"
 import {Screen} from "@/components/ignite"
 import {Group} from "@/components/ui"
 import {BgTimer, engine, useRefresh} from "@mentra/engine"
@@ -171,6 +172,7 @@ export default function Homepage() {
             scrollEventThrottle={16}>
             {Platform.OS === "android" && <View style={{paddingTop: insets.top}} />}
             <View className="h-4" />
+            <FirstConnectionBanner />
             {renderContent()}
             <View className="h-4" />
           </ScrollView>

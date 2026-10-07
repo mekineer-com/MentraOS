@@ -2,6 +2,7 @@ import {act, fireEvent, render, screen} from "@testing-library/react-native"
 import type {ClientApp} from "@mentra/engine"
 
 import {AppsGrid} from "./AppsGrid"
+import {useOpenAlmaHostUpdate} from "@/services/openAlmaHostUpdate"
 
 let mockApps: ClientApp[] = []
 const mockStart = jest.fn()
@@ -72,6 +73,7 @@ jest.mock("react-native-draggable-masonry", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks()
+  useOpenAlmaHostUpdate.setState({release: null})
   mockApps = [
     {packageName: "com.mentra.settings", name: "Settings", offlineRoute: "/miniapps/settings/main"} as ClientApp,
   ]
@@ -145,4 +147,28 @@ test("unrecognized accessibility actions do not launch a miniapp", async () => {
   })
   expect(mockStart).not.toHaveBeenCalled()
   expect(mockPush).not.toHaveBeenCalled()
+})
+
+test.each([false, true])("only Settings shows the host-update indicator, allApps=%s", async (showAllApps) => {
+  mockApps.push({packageName: "com.openalma.mentra", name: "Iris"} as ClientApp)
+  render(<AppsGrid showAllApps={showAllApps} />)
+  await act(async () => {})
+  expect(screen.queryByText("!")).toBeNull()
+  const originalLabelClass = "w-full h-9 my-1 items-center justify-start"
+  const labelContainers = (name: string, className: string) =>
+    screen.getByRole("button", {name}).findAll((node) => node.props.className === className)
+  expect(labelContainers("Settings", originalLabelClass).length).toBeGreaterThan(0)
+  act(() =>
+    useOpenAlmaHostUpdate.setState({
+      release: {version: "3.2.2", downloadUrl: "https://example.com/OpenAlma.apk"},
+    }),
+  )
+  expect(screen.getAllByText("!")).toHaveLength(1)
+  expect(screen.getByRole("button", {name: "Settings"}).props.accessibilityHint).toBe("mentraUpdate:available")
+  expect(screen.getByRole("button", {name: "Iris"}).props.accessibilityHint).toBeUndefined()
+  expect(labelContainers("Settings", "w-full h-9 my-1 flex-row items-start justify-center").length).toBeGreaterThan(0)
+  expect(labelContainers("Iris", originalLabelClass).length).toBeGreaterThan(0)
+  act(() => useOpenAlmaHostUpdate.setState({release: null}))
+  expect(screen.queryByText("!")).toBeNull()
+  expect(labelContainers("Settings", originalLabelClass).length).toBeGreaterThan(0)
 })

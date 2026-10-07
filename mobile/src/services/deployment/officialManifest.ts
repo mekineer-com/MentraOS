@@ -1,6 +1,7 @@
 import Constants from "expo-constants"
 
 import {APP_STORE_REVIEW_URL, APP_STORE_URL, PLAY_STORE_URL} from "@/constants/appConfig"
+import {isOpenAlmaHost, OPENALMA_HOST_RELEASES_URL} from "@/services/openAlmaHostUpdate"
 
 import {packagedOtaPin} from "./packagedOtaPin"
 import type {ConsumerDeployment, DeploymentManifest} from "./types"
@@ -26,7 +27,7 @@ export function createOfficialManifest(): DeploymentManifest {
     },
     appUpdates: {
       mode: "store",
-      storeUrls: {android: PLAY_STORE_URL, ios: APP_STORE_URL},
+      storeUrls: {android: isOpenAlmaHost() ? OPENALMA_HOST_RELEASES_URL : PLAY_STORE_URL, ios: APP_STORE_URL},
       reviewUrls: {android: PLAY_STORE_URL, ios: APP_STORE_REVIEW_URL},
     },
     content: {

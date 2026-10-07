@@ -2,6 +2,7 @@ import {useEffect, useRef} from "react"
 import {AppState} from "react-native"
 import * as Application from "expo-application"
 import * as Device from "expo-device"
+import {create} from "zustand"
 
 import {showAlert} from "@/contexts/ModalContext"
 import {translate} from "@/i18n"
@@ -13,6 +14,12 @@ import {DEFAULT_OPENALMA_ADDRESS, IRIS_PACKAGE, OPENALMA_ADDRESS_KEY, OPENALMA_H
   OPENALMA_HOST_PACKAGE, isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
 const IRIS_INSTALLED_OFFER_KEY = "openalma.installed-offer"
+class OpenAlmaReportError extends Error {}
+
+export const useFirstConnection = create<{error: string | null; irisInstalled: boolean | null}>(() => ({
+  error: null,
+  irisInstalled: null,
+}))
 
 export function savedOpenAlmaAddress(): string {
   const saved = storage.load<string>(OPENALMA_ADDRESS_KEY)
@@ -26,16 +33,23 @@ export async function reportOpenAlmaHost(baseUrl: string): Promise<string> {
   await localMiniappRuntime.setSimpleStorage(IRIS_PACKAGE, OPENALMA_HOST_KEY, JSON.stringify({...host, deviceSessionId}))
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 2000)
+  const request = async (url: string, init?: RequestInit) => {
+    try {
+      return await fetch(url, {...init, signal: controller.signal})
+    } catch (cause) {
+      throw new OpenAlmaReportError(translate("firstconnection:unreachable", {address: baseUrl}), {cause})
+    }
+  }
   try {
-    const ownerResponse = await fetch(`${baseUrl}/integration/mentra/owner`, {signal: controller.signal})
-    if (!ownerResponse.ok) throw new Error("OpenAlma is unavailable")
+    const ownerResponse = await request(`${baseUrl}/integration/mentra/owner`)
+    if (!ownerResponse.ok)
+      throw new OpenAlmaReportError(translate("firstconnection:httpError", {status: ownerResponse.status}))
     const owner = await ownerResponse.json()
     if (typeof owner.user_id !== "string" || !owner.user_id.trim()) {
-      throw new Error("Set up the OpenAlma owner in the launcher")
+      throw new OpenAlmaReportError(translate("firstconnection:ownerNotConfigured"))
     }
-    const response = await fetch(`${baseUrl}/integration/mentra/host/seen`, {
+    const response = await request(`${baseUrl}/integration/mentra/host/seen`, {
       method: "POST",
-      signal: controller.signal,
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         user_id: owner.user_id,
@@ -44,7 +58,7 @@ export async function reportOpenAlmaHost(baseUrl: string): Promise<string> {
         default_name: Device.deviceName?.trim() || Device.modelName?.trim() || "Phone",
       }),
     })
-    if (!response.ok) throw new Error(`OpenAlma reporting failed (${response.status})`)
+    if (!response.ok) throw new OpenAlmaReportError(translate("firstconnection:httpError", {status: response.status}))
     return deviceSessionId
   } finally {
     clearTimeout(timeout)
@@ -62,12 +76,31 @@ export function IrisUpdatePrompt() {
   useEffect(() => {
     if (Application.applicationId !== OPENALMA_HOST_PACKAGE || activeDeployment.kind !== "consumer") return
 
+    let disposed = false
+    let registryRead = 0
+    const refreshInstalled = async () => {
+      const read = ++registryRead
+      const apps = await appRegistry.getInstalledMiniapps()
+      if (!disposed && read === registryRead) {
+        useFirstConnection.setState({irisInstalled: apps.some((app) => app.packageName === IRIS_PACKAGE)})
+      }
+    }
+    const unsubscribe = appRegistry.subscribe(() => void refreshInstalled())
+    void refreshInstalled()
+
     const check = async () => {
       if (checking.current) return
       checking.current = true
       try {
         const {baseUrl, installerUrl: sourceUrl} = openAlmaAddresses(savedOpenAlmaAddress())
-        const deviceSessionId = await reportOpenAlmaHost(baseUrl)
+        let deviceSessionId: string
+        try {
+          deviceSessionId = await reportOpenAlmaHost(baseUrl)
+          if (!disposed) useFirstConnection.setState({error: null})
+        } catch (error) {
+          if (!disposed && error instanceof OpenAlmaReportError) useFirstConnection.setState({error: error.message})
+          return
+        }
 
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 2000)
@@ -182,7 +215,12 @@ export function IrisUpdatePrompt() {
     }
     onState(AppState.currentState)
     const subscription = AppState.addEventListener("change", onState)
-    return () => {clearInterval(timer); subscription.remove()}
+    return () => {
+      disposed = true
+      unsubscribe()
+      clearInterval(timer)
+      subscription.remove()
+    }
   }, [activeDeployment.kind])
 
   return null

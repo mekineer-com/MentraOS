@@ -1,6 +1,19 @@
 const en = {
+  mentraUpdate: {
+    available: "OpenAlma Mentra update available",
+    update: "Update OpenAlma Mentra",
+    failedTitle: "Could not open update",
+  },
+  firstconnection: {
+    title: "Connect to memU Server",
+    serverAddress: "memU Server address",
+    guidance: "Connect your phone and the OpenAlma server to the same private network. Check that the address here matches Iris setup in the launcher.",
+    addressHint: "Use the address shown in the launcher's Iris setup.",
+    unreachable: "Can't reach the OpenAlma server at {{address}}. Connect the phone and server to the same private network; check the address matches Iris setup in the launcher.",
+    httpError: "OpenAlma answered with an error ({{status}}).",
+    ownerNotConfigured: "Set up the OpenAlma owner in the launcher",
+  },
   irisUpdate: {
-    serverAddress: "OpenAlma server address",
     failedTitle: "Iris update failed",
     completionFailedTitle: "Iris installed; setup incomplete",
   },

@@ -1,5 +1,5 @@
 import {createElement} from "react"
-import {AppState} from "react-native"
+import {AppState, Linking} from "react-native"
 import {act, render, waitFor} from "@testing-library/react-native"
 
 import {showAlert} from "@/contexts/ModalContext"
@@ -7,8 +7,12 @@ import {TextField} from "@/components/ignite"
 import {storage} from "@/utils/storage/storage"
 import {engine} from "@mentra/engine"
 import {appRegistry, localMiniappRuntime, miniappLauncher} from "@mentra/engine-host-internal"
-import {IrisUpdatePrompt} from "./IrisUpdatePrompt"
+import {IrisUpdatePrompt, reportOpenAlmaHost, useFirstConnection} from "./IrisUpdatePrompt"
+import {OpenAlmaAddressEditor} from "@/components/settings/OpenAlmaAddressEditor"
+import {FirstConnectionBanner} from "@/components/home/FirstConnectionBanner"
 import MainSettingsPage from "@/app/miniapps/settings/main"
+import {RouteButton} from "@/components/ui/RouteButton"
+import {useOpenAlmaHostUpdate} from "@/services/openAlmaHostUpdate"
 import {isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateOffer"
 
 let mockApplicationId = "com.mentra.mentra.openalma"
@@ -29,7 +33,9 @@ jest.mock("@/utils/storage/storage", () => ({storage: {
   load: jest.fn(() => ({is_ok: () => false})), save: jest.fn(() => ({is_error: () => false})),
 }}))
 jest.mock("@/contexts/ModalContext", () => ({showAlert: jest.fn()}))
-jest.mock("@/i18n", () => ({translate: (key: string) => key}))
+jest.mock("@/i18n", () => ({
+  translate: (key: string, options?: Record<string, unknown>) => (options ? `${key} ${JSON.stringify(options)}` : key),
+}))
 jest.mock("@mentra/engine", () => ({
   engine: {miniapps: {refresh: jest.fn(), setForeground: jest.fn()}},
   SETTINGS: {debug_mode: {key: "debug"}, super_mode: {key: "super"}, appearance_menu_enabled: {key: "appearance"}},
@@ -37,21 +43,24 @@ jest.mock("@mentra/engine", () => ({
 }))
 jest.mock("@/components/dev/VersionInfo", () => ({VersionInfo: () => null}))
 jest.mock("@/components/settings/DeviceSettingsSection", () => ({DeviceSettingsSection: () => null}))
-jest.mock("@/components/ui/RouteButton", () => ({RouteButton: () => null}))
+jest.mock("@/components/ui/RouteButton", () => ({RouteButton: jest.fn(() => null)}))
 jest.mock("@/components/ui/Spacer", () => ({Spacer: () => null}))
-jest.mock("@/components/ui/Group", () => ({Group: require("react-native").View}))
-jest.mock("@/components/ignite", () => ({
-  Screen: require("react-native").View, Icon: () => null,
-  TextField: jest.fn(({helper}: {helper: string}) => require("react").createElement(require("react-native").Text, null, helper)),
-}))
 jest.mock("@/contexts/ThemeContext", () => ({useAppTheme: () => ({theme: {
   spacing: {s2: 2, s6: 6, s10: 10}, colors: {secondary_foreground: "white"},
 }})}))
 jest.mock("@/stores/navigation", () => ({useNavigationStore: {getState: () => ({push: jest.fn()})}}))
 jest.mock("@/stores/capsule", () => ({useRegisterCapsule: jest.fn()}))
+jest.mock("@/components/ui/Group", () => ({Group: require("react-native").View}))
+jest.mock("@/components/ignite", () => ({
+  Screen: require("react-native").View, Icon: () => null,
+  Text: ({tx}: {tx: string}) => require("react").createElement(require("react-native").Text, null, tx),
+  TextField: jest.fn(({helper}: {helper: string}) => require("react").createElement(require("react-native").Text, null, helper)),
+}))
 jest.mock("@mentra/engine-host-internal", () => ({
   appRegistry: {
-     installFromJsonUrl: jest.fn(),
+    installFromJsonUrl: jest.fn(),
+    getInstalledMiniapps: jest.fn(async () => []),
+    subscribe: jest.fn(() => jest.fn()),
   },
   miniappLauncher: {stop: jest.fn(), ensureConnected: jest.fn()},
   localMiniappRuntime: {getSimpleStorage: jest.fn(), setSimpleStorage: jest.fn()},
@@ -59,6 +68,9 @@ jest.mock("@mentra/engine-host-internal", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks()
+  useFirstConnection.setState({error: null, irisInstalled: null})
+  useOpenAlmaHostUpdate.setState({release: null})
+  ;(appRegistry.getInstalledMiniapps as jest.Mock).mockResolvedValue([])
   ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockReset()
   mockApplicationId = "com.mentra.mentra.openalma"
   mockDeploymentKind = "consumer"
@@ -66,16 +78,28 @@ beforeEach(() => {
   global.fetch = jest.fn()
 })
 
-test("opening fork Settings shows an unreachable default without editing the address", async () => {
-  global.fetch = jest.fn(async () => {throw new Error("Network unavailable")}) as unknown as typeof fetch
+test("Settings reuses the address editor and opens only an available host update", async () => {
+  global.fetch = jest.fn(async () => {
+    throw new Error("Network unavailable")
+  }) as unknown as typeof fetch
   const view = render(createElement(MainSettingsPage))
-  await waitFor(() => expect(view.getByText("Network unavailable")).toBeTruthy())
-  expect((TextField as jest.Mock).mock.calls.every(([props]) =>
-    props.labelTx === "irisUpdate:serverAddress" && props.value === "http://10.77.0.1")).toBe(true)
+  await waitFor(() => expect(view.getByText('firstconnection:unreachable {"address":"http://10.77.0.1"}')).toBeTruthy())
+  expect(
+    (TextField as jest.Mock).mock.calls.every(
+      ([props]) => props.labelTx === "firstconnection:serverAddress" && props.value === "http://10.77.0.1",
+    ),
+  ).toBe(true)
   expect(storage.load).toHaveBeenCalledTimes(1)
   expect(storage.load).toHaveBeenCalledWith("openalma.server-address")
-  expect(storage.save).toHaveBeenCalledTimes(1)
-  expect(storage.save).toHaveBeenCalledWith("openalma.server-address", "http://10.77.0.1")
+  expect(storage.save).not.toHaveBeenCalled()
+  expect((RouteButton as jest.Mock).mock.calls.some(([props]) => props.label === "mentraUpdate:update")).toBe(false)
+  const downloadUrl = "https://github.com/mekineer-com/MentraOS/releases/download/v3.2.2/OpenAlma.apk"
+  const open = jest.spyOn(Linking, "openURL").mockResolvedValue(undefined)
+  act(() => useOpenAlmaHostUpdate.setState({release: {version: "3.2.2", downloadUrl}}))
+  const [update] = (RouteButton as jest.Mock).mock.calls.find(([props]) => props.label === "mentraUpdate:update")!
+  await act(async () => update.onPress())
+  expect(open).toHaveBeenCalledWith(downloadUrl)
+  open.mockRestore()
   view.unmount()
 })
 
@@ -351,6 +375,144 @@ test("does not claim an installer without an automatic offer", async () => {
     "http://10.77.0.1:6789/openalma-offer.json", expect.anything()))
   expect(showAlert).not.toHaveBeenCalled()
   expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
+  expect(useFirstConnection.getState().error).toBeNull()
+  view.unmount()
+})
+
+test.each(["network", "timeout"])("host reports preserve the raw %s cause", async (failure) => {
+  const cause = new Error(failure === "timeout" ? "Aborted" : "Network unavailable")
+  let abort!: () => void
+  const timeout = jest.spyOn(global, "setTimeout").mockImplementation(((callback: () => void) => {
+    abort = callback
+    return 1
+  }) as typeof setTimeout)
+  global.fetch = jest.fn(async (_url, init) => {
+    if (failure === "network") throw cause
+    return new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(cause))
+      abort()
+    })
+  }) as unknown as typeof fetch
+  try {
+    await expect(reportOpenAlmaHost("http://test.example:8099")).rejects.toMatchObject({
+      message: 'firstconnection:unreachable {"address":"http://test.example:8099"}',
+      cause,
+    })
+  } finally {
+    timeout.mockRestore()
+  }
+})
+
+test.each(["owner", "host/seen"])("an HTTP error from %s is not a network failure", async (endpoint) => {
+  global.fetch = jest.fn(async (url: string) =>
+    url.endsWith(`/${endpoint}`) ? {ok: false, status: 503} : {ok: true, json: async () => ({user_id: "Test User"})},
+  ) as unknown as typeof fetch
+  await expect(reportOpenAlmaHost("http://test.example:8099")).rejects.toMatchObject({
+    message: 'firstconnection:httpError {"status":503}',
+  })
+})
+
+test("an unconfigured owner remains an explicit launcher setup error", async () => {
+  global.fetch = jest.fn(async () => ({ok: true, json: async () => ({user_id: null})})) as unknown as typeof fetch
+  await expect(reportOpenAlmaHost("http://test.example:8099")).rejects.toThrow("firstconnection:ownerNotConfigured")
+  expect(global.fetch).toHaveBeenCalledTimes(1)
+})
+
+test("MCP failure shows an editable banner and registry installation hides it even offline", async () => {
+  global.fetch = jest.fn(async () => {
+    throw new Error("Offline")
+  }) as unknown as typeof fetch
+  const unsubscribe = jest.fn()
+  let registryChanged!: () => void
+  ;(appRegistry.subscribe as jest.Mock).mockImplementationOnce((callback) => {
+    registryChanged = callback
+    return unsubscribe
+  })
+  const view = render(
+    createElement(() =>
+      createElement("View", null, createElement(IrisUpdatePrompt), createElement(FirstConnectionBanner)),
+    ),
+  )
+  await waitFor(() => expect(view.getByText("firstconnection:title")).toBeTruthy())
+  expect(TextField).toHaveBeenCalled()
+  expect(storage.save).not.toHaveBeenCalled()
+  expect(showAlert).not.toHaveBeenCalled()
+  ;(appRegistry.getInstalledMiniapps as jest.Mock).mockResolvedValue([{packageName: "com.openalma.mentra"}])
+  await act(async () => registryChanged())
+  expect(view.queryByText("firstconnection:title")).toBeNull()
+  view.unmount()
+  expect(unsubscribe).toHaveBeenCalledTimes(1)
+})
+
+test("already-installed local Iris suppresses host guidance on MCP failure", async () => {
+  ;(appRegistry.getInstalledMiniapps as jest.Mock).mockResolvedValue([{packageName: "com.openalma.mentra"}])
+  global.fetch = jest.fn(async () => {
+    throw new Error("Offline")
+  }) as unknown as typeof fetch
+  const view = render(
+    createElement(() =>
+      createElement("View", null, createElement(IrisUpdatePrompt), createElement(FirstConnectionBanner)),
+    ),
+  )
+  await waitFor(() => expect(useFirstConnection.getState().error).not.toBeNull())
+  expect(view.queryByText("firstconnection:title")).toBeNull()
+  expect(showAlert).not.toHaveBeenCalled()
+  view.unmount()
+})
+
+test("a stale registry read cannot resurrect guidance after an install event", async () => {
+  let finishOldRead!: (apps: unknown[]) => void
+  let registryChanged!: () => void
+  ;(appRegistry.getInstalledMiniapps as jest.Mock).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishOldRead = resolve
+    }),
+  )
+  ;(appRegistry.subscribe as jest.Mock).mockImplementationOnce((callback) => {
+    registryChanged = callback
+    return jest.fn()
+  })
+  global.fetch = jest.fn(async () => {
+    throw new Error("Offline")
+  }) as unknown as typeof fetch
+  const view = render(
+    createElement(() =>
+      createElement("View", null, createElement(IrisUpdatePrompt), createElement(FirstConnectionBanner)),
+    ),
+  )
+  await waitFor(() => expect(useFirstConnection.getState().error).not.toBeNull())
+  ;(appRegistry.getInstalledMiniapps as jest.Mock).mockResolvedValue([{packageName: "com.openalma.mentra"}])
+  await act(async () => registryChanged())
+  await act(async () => finishOldRead([]))
+  expect(useFirstConnection.getState().irisInstalled).toBe(true)
+  expect(view.queryByText("firstconnection:title")).toBeNull()
+  view.unmount()
+})
+
+test("the editor saves only the normalized phone address and clears guidance on success", async () => {
+  useFirstConnection.setState({error: "Offline", irisInstalled: false})
+  global.fetch = jest.fn(async () => ({
+    ok: true,
+    json: async () => ({user_id: "Test User"}),
+  })) as unknown as typeof fetch
+  const view = render(createElement(OpenAlmaAddressEditor, {probeOnMount: false}))
+  await act(async () => {
+    const [props] = (TextField as jest.Mock).mock.calls.at(-1)
+    props.onChangeText(" https://test.example:8099/ ")
+  })
+  await act(async () => {
+    const [props] = (TextField as jest.Mock).mock.calls.at(-1)
+    props.onEndEditing()
+  })
+  expect(storage.save).toHaveBeenCalledTimes(1)
+  expect(storage.save).toHaveBeenCalledWith("openalma.server-address", "https://test.example:8099")
+  expect(useFirstConnection.getState().error).toBeNull()
+  expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledTimes(1)
+  expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledWith(
+    "com.openalma.mentra",
+    "openalma.host",
+    expect.any(String),
+  )
   view.unmount()
 })
 
