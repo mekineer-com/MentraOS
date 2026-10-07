@@ -89,7 +89,7 @@ test("workspace mode neither starts the private updater nor accepts a waiting of
 
   mockDeploymentKind = "consumer"
   global.fetch = jest.fn(async (url: string) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false})}
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "pending", deviceSessionId: "android-test-phone"})}
@@ -129,13 +129,15 @@ test("accepts only a targeted offer", () => {
 })
 
 test("retries acknowledgement without reinstalling Iris", async () => {
+  const timers = jest.spyOn(global, "setTimeout")
+  let firstAckSignal: AbortSignal | undefined
   const deviceSessionId = "android-test-phone"
   let acknowledgements = 0
   let activate!: () => void
   ;(miniappLauncher.ensureConnected as jest.Mock).mockReturnValueOnce(new Promise<void>((resolve) => {activate = resolve}))
   ;(appRegistry.installFromJsonUrl as jest.Mock).mockResolvedValue({is_error: () => false})
-  global.fetch = jest.fn(async (url: string) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false})}
+  global.fetch = jest.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) {
       return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
@@ -145,6 +147,12 @@ test("retries acknowledgement without reinstalling Iris", async () => {
     }
     if (url.endsWith("/integration/mentra/host/seen")) return {ok: true}
     acknowledgements += 1
+    if (acknowledgements === 1) {
+      firstAckSignal = init!.signal!
+      return await new Promise((_resolve, reject) => {
+        firstAckSignal!.addEventListener("abort", () => reject(new Error("ACK timeout")), {once: true})
+      })
+    }
     return {ok: acknowledgements > 2, status: 503}
   }) as unknown as typeof fetch
 
@@ -153,6 +161,9 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   expect(acknowledgements).toBe(0)
   expect(engine.miniapps.setForeground).not.toHaveBeenCalled()
   activate()
+  await waitFor(() => expect(firstAckSignal).toBeDefined())
+  const timeout = timers.mock.calls.filter(([, delay]) => delay === 2000).at(-1)![0] as () => void
+  timeout()
   await waitFor(() => expect(showAlert).toHaveBeenCalledWith(expect.objectContaining({
     title: "irisUpdate:completionFailedTitle",
   })))
@@ -164,6 +175,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   await waitFor(() => expect(acknowledgements).toBe(3))
 
   expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
+  expect(appRegistry.installFromJsonUrl).toHaveBeenCalledWith("http://10.77.0.1:6789/offer-1")
   expect(
     (global.fetch as jest.Mock).mock.calls.filter(([url]) => url.endsWith("/integration/mentra/host/seen")),
   ).toHaveLength(3)
@@ -187,6 +199,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
   expect(miniappLauncher.ensureConnected).toHaveBeenCalledTimes(1)
   expect(engine.miniapps.setForeground).toHaveBeenCalledTimes(1)
   view.unmount()
+  timers.mockRestore()
 })
 
 test("foreground ticks do not repeat a failed install or its alert", async () => {
@@ -197,7 +210,7 @@ test("foreground ticks do not repeat a failed install or its alert", async () =>
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: available, json: async () => ({offerId: "failed", deviceSessionId: "android-test-phone"})}
-    if (url.includes("/status?")) return {ok: true, json: async () => ({active: false})}
+    if (url.includes("/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
     return {ok: true}
   }) as unknown as typeof fetch
   const view = render(createElement(IrisUpdatePrompt))
@@ -218,22 +231,21 @@ test("foreground ticks do not repeat a failed install or its alert", async () =>
   }
 })
 
-test.each(["active", "journal", "active-after-install"])("does not replace Iris with %s work", async (work) => {
+test.each(["active", "starting", "active-after-install", "starting-after-install"])("does not replace Iris with %s work", async (work) => {
   ;(appRegistry.installFromJsonUrl as jest.Mock).mockResolvedValue({is_error: () => false})
-  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async (_package, key) =>
-    work === "journal" && key === "openalma:gemini-session-v1" ? "pending" : null)
   global.fetch = jest.fn(async (url: string) => {
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "busy", deviceSessionId: "android-test-phone"})}
     if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({
+      starting: work === "starting" || (work === "starting-after-install" && (appRegistry.installFromJsonUrl as jest.Mock).mock.calls.length > 0),
       active: work === "active" || (work === "active-after-install" && (appRegistry.installFromJsonUrl as jest.Mock).mock.calls.length > 0),
     })}
     return {ok: true}
   }) as unknown as typeof fetch
   const view = render(createElement(IrisUpdatePrompt))
   await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/status?"), expect.anything()))
-  if (work === "active-after-install") {
+  if (work.endsWith("after-install")) {
     await waitFor(() => expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => url.includes("/status?"))).toHaveLength(2))
     expect(appRegistry.installFromJsonUrl).toHaveBeenCalledTimes(1)
   } else expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
@@ -241,9 +253,28 @@ test.each(["active", "journal", "active-after-install"])("does not replace Iris 
   view.unmount()
 })
 
+test("a saved phone backup does not block installation and is not cleared", async () => {
+  ;(appRegistry.installFromJsonUrl as jest.Mock).mockResolvedValue({is_error: () => false})
+  ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async (_package, key) =>
+    key === "openalma:gemini-session-v1" ? "saved backup" : null)
+  global.fetch = jest.fn(async (url: string) => {
+    if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
+    if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
+    if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "recover", deviceSessionId: "android-test-phone"})}
+    if (url.includes("/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
+    return {ok: true}
+  }) as unknown as typeof fetch
+  const view = render(createElement(IrisUpdatePrompt))
+  await waitFor(() => expect(engine.miniapps.setForeground).toHaveBeenCalled())
+  expect(appRegistry.installFromJsonUrl).toHaveBeenCalledWith("http://10.77.0.1:6789/recover")
+  expect(localMiniappRuntime.setSimpleStorage).not.toHaveBeenCalledWith(
+    "com.openalma.mentra", "openalma:gemini-session-v1", expect.anything())
+  view.unmount()
+})
+
 test("reports its own identity before Iris exists and ignores another installation's offer", async () => {
   global.fetch = jest.fn(async (url: string) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false})}
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "foreign", deviceSessionId: "other-installation"})}
@@ -286,7 +317,7 @@ test("resumes acknowledgement from a persisted installed offer without reinstall
   ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockImplementation(async (_package, key) =>
     key === "openalma.installed-offer" ? "offer-4" : null)
   global.fetch = jest.fn(async (url: string) => {
-    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false})}
+    if (url.includes("/integration/mentra/status?")) return {ok: true, json: async () => ({active: false, starting: false})}
     if (url.endsWith("/owner")) return {ok: true, json: async () => ({user_id: "Test User"})}
     if (url.endsWith("/miniapp.json")) return {ok: true, json: async () => ({packageName: "com.openalma.mentra", version: "0.1.10"})}
     if (url.endsWith("/openalma-offer.json")) return {ok: true, json: async () => ({offerId: "offer-4", deviceSessionId: deviceSessionId})}

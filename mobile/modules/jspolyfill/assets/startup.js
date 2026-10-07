@@ -1,7 +1,7 @@
 // @generated MentraJS polyfill bundle — see mobile/modules/jspolyfill
 "use strict";
 (() => {
-  // src/startup.ts
+  // mobile/modules/jspolyfill/src/startup.ts
   (function installMentraJSRuntime() {
     const g = globalThis;
     function installConsole() {
@@ -549,6 +549,8 @@
     if (typeof g.fetch !== "function") {
       ;
       g.fetch = async (input, init) => {
+        const signal = init?.signal;
+        if (signal?.aborted) throw signal.reason;
         const url = typeof input === "string" ? input : input.toString();
         const method = (init?.method ?? "GET").toUpperCase();
         let bodyString = null;
@@ -577,9 +579,15 @@
           }
         }
         const sendRequest = g.__mentraSendRequest;
-        const result = await sendRequest("fetch", "request", [
+        const request = sendRequest("fetch", "request", [
           { url, method, headers, body: bodyString }
         ]);
+        let onAbort;
+        const result = await (signal ? Promise.race([request, new Promise((_, reject) => {
+          onAbort = () => reject(signal.reason);
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        })]).finally(() => signal.removeEventListener("abort", onAbort)) : request);
         const bodyText = typeof result.body === "string" ? result.body : "";
         const responseHeaders = new Map(Object.entries(result.headers ?? {}));
         class ResponseLike {

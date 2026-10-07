@@ -120,7 +120,7 @@ export default function Compositor() {
     }
     if (foregroundApp) {
       // Mount before starting the slide, and keep the same reference across store refreshes.
-      setRenderedApp((prev) => (prev?.packageName === foregroundApp.packageName ? prev : foregroundApp))
+      setRenderedApp((prev) => (prev?.packageName === foregroundApp.packageName && prev?.version === foregroundApp.version ? prev : foregroundApp))
     }
     if (Platform.OS === "ios" && iosAppSwitcherBottomSwipe) {
       if (foregroundApp) {

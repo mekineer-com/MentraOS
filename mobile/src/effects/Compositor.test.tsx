@@ -25,15 +25,25 @@ jest.mock("@mentra/engine", () => ({
 }))
 jest.mock("@/components/miniapp/LocalMiniappView", () => {
   const {Pressable} = require("react-native")
-  return ({onClose, onMinimize, onExit}: {onClose: () => void; onMinimize: () => void; onExit: () => void}) => {
+  return ({onClose, onMinimize, onExit, version}: {onClose: () => void; onMinimize: () => void; onExit: () => void; version: string}) => {
     return (
       <>
         <Pressable testID="close-miniapp" onPress={onClose} />
         <Pressable testID="minimize-miniapp" onPress={onMinimize} />
         <Pressable testID="back-miniapp" onPress={() => onExit()} />
+        <Pressable testID={`version-${version}`} />
       </>
     )
   }
+})
+
+test("a same-package update refreshes its retained foreground version", () => {
+  mockForegroundApp = {...mockForegroundApp!, version: "1.0.0"}
+  const view = render(<Compositor />)
+  expect(view.getByTestId("version-1.0.0")).toBeTruthy()
+  mockForegroundApp = {...mockForegroundApp, version: "2.0.0"}
+  view.rerender(<Compositor />)
+  expect(view.getByTestId("version-2.0.0")).toBeTruthy()
 })
 jest.mock("@/components/miniapp/OfflineAppHost", () => () => null)
 jest.mock("@/components/miniapp/offlineHostedPackages", () => ({isOfflineHosted: () => false}))

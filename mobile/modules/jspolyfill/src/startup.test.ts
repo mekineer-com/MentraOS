@@ -120,6 +120,20 @@ function evalBundle(stubs = freshStubs()): Record<string, unknown> {
 }
 
 describe("startup bundle", () => {
+  test("fetch rejects an aborted native request and ignores its late response", async () => {
+    const sandbox = evalBundle()
+    let finish!: (value: unknown) => void
+    sandbox.__mentraSendRequest = () => new Promise((resolve) => {finish = resolve})
+    const controller = new (sandbox.AbortController as typeof AbortController)()
+    const request = (sandbox.fetch as typeof fetch)("http://test.example", {signal: controller.signal})
+    const reason = new Error("deadline")
+    controller.abort(reason)
+    await expect(request).rejects.toBe(reason)
+    finish({status: 200, body: "late"})
+    await Promise.resolve()
+    await expect(request).rejects.toBe(reason)
+  })
+
   test("bundle parses + executes without throwing", () => {
     expect(() => evalBundle()).not.toThrow()
   })

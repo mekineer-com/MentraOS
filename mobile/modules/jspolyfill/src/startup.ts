@@ -728,6 +728,8 @@ declare const __nativeClearTimer: (token: number) => void
   // where body is either a JSON-encodable value or a base64 string.
   if (typeof (g as Record<string, unknown>).fetch !== "function") {
     ;(g as Record<string, unknown>).fetch = async (input: string | URL, init?: RequestInit) => {
+      const signal = init?.signal
+      if (signal?.aborted) throw signal.reason
       const url = typeof input === "string" ? input : input.toString()
       const method = (init?.method ?? "GET").toUpperCase()
       let bodyString: string | null = null
@@ -760,9 +762,16 @@ declare const __nativeClearTimer: (token: number) => void
         method: string,
         args: unknown[],
       ) => Promise<unknown>
-      const result = (await sendRequest("fetch", "request", [
+      const request = sendRequest("fetch", "request", [
         {url, method, headers, body: bodyString},
-      ])) as {
+      ])
+      let onAbort!: () => void
+      // ponytail: native HTTP keeps its own timeout until upstream exposes cancellation.
+      const result = (await (signal ? Promise.race([request, new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason)
+        signal.addEventListener("abort", onAbort, {once: true})
+        if (signal.aborted) onAbort()
+      })]).finally(() => signal.removeEventListener("abort", onAbort)) : request)) as {
         status: number
         statusText?: string
         headers?: Record<string, string>
