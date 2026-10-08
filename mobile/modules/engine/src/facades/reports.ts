@@ -13,6 +13,7 @@ import {isGlassesConnected} from "../services/GlassesReadiness"
 import {cloudClientService} from "../services/CloudClientService"
 import {collectDiagnosticContext} from "../utils/diagnosticContext"
 import {logBuffer} from "../utils/devLogging"
+import {getConfigValues} from "../runtime/bootstrap"
 
 export type {
   ReportAttachmentInput,
@@ -42,7 +43,7 @@ type InternalSubmitReportInput = EngineSubmitReportInput | EngineSubmitAutomatic
 
 export type ReportSubmitResult =
   | {status: "submitted"; reportId: string; reportStatus: ReportStatus}
-  | {status: "skipped"; reason: "throttled_within_window"}
+  | {status: "skipped"; reason: "throttled_within_window" | "automatic_reports_disabled"}
   | {status: "failed"; error: string}
 
 const DEFAULT_AUTOMATIC_REPORT_THROTTLE_MS = 90_000
@@ -83,6 +84,9 @@ function notifyGlasses(reportId: string, apiBaseUrl?: string | null): void {
 }
 
 async function submitReportInternal(input: InternalSubmitReportInput): Promise<ReportSubmitResult> {
+  if (input.kind === "automatic" && getConfigValues().automaticReportsEnabled === false) {
+    return {status: "skipped", reason: "automatic_reports_disabled"}
+  }
   if (!cloudClientService.hasCore()) {
     return {status: "failed", error: "Reports are unavailable in this deployment"}
   }

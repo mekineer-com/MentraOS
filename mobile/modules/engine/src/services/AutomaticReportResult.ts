@@ -29,6 +29,10 @@ export function logAutomaticReportSubmissionStatus(
     return
   }
   if (result.status === "skipped") {
+    if (result.reason === "automatic_reports_disabled") {
+      console.log(`[${logTag}] Skipping automatic report:`, result.reason)
+      return
+    }
     console.log(
       `[${logTag}] Skipping automatic report within throttle window:`,
       ...(throttleDetails.length > 0 ? throttleDetails : [result.reason]),

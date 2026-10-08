@@ -1,6 +1,7 @@
 import {SETTINGS, engine} from "@mentra/engine"
 
 import {deploymentStore} from "@/services/deployment"
+import {isOpenAlmaHost} from "@/services/openAlmaHostUpdate"
 
 let analyticsModule: typeof import("@react-native-firebase/analytics") | null = null
 let initialized = false
@@ -67,7 +68,7 @@ export function initAnalytics(): Promise<void> {
 /** Disable collection. Runs after any in-flight enable so the final state wins. */
 export function disableAnalytics(): Promise<void> {
   return serializeCollectionTransition(async () => {
-    if (!analyticsModule && !initialized) return
+    if (!analyticsModule && !initialized && !isOpenAlmaHost()) return
     const module = loadAnalyticsModule()
     if (!module) return
     await module.default().setAnalyticsCollectionEnabled(false)

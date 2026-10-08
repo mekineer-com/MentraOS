@@ -1,4 +1,12 @@
-import {submitAutomaticReport} from "../../../modules/engine/src/facades/reports"
+import {reports, submitAutomaticReport} from "../../../modules/engine/src/facades/reports"
+import {configure, resetForTests} from "../../../modules/engine/src/runtime/bootstrap"
+import {collectDiagnosticContext} from "../../../modules/engine/src/utils/diagnosticContext"
+import {pairing} from "../../../modules/engine/src/facades/pairing"
+import {startMentraJSCrashloopReportService, stopMentraJSCrashloopReportService} from "../../../modules/engine/src/services/MentraJSCrashloopReportService"
+import {islandNotifications} from "../../../modules/engine/src/services/NotificationsEmitter"
+import {MentraJSCrashController} from "../../../modules/engine/src/services/MentraJSCrashController"
+
+jest.mock("../../../modules/engine/src/services/MiniappEngine", () => ({getMiniappEngine: () => null}))
 import {cloudClientService} from "../../../modules/engine/src/services/CloudClientService"
 import {logBuffer} from "../../../modules/engine/src/utils/devLogging"
 
@@ -47,6 +55,8 @@ const automaticInput = (throttleKey: string) => ({
 
 describe("reports facade automatic throttling", () => {
   beforeEach(() => {
+    resetForTests()
+    jest.mocked(collectDiagnosticContext).mockClear()
     submitMock.mockReset()
     addLogsMock.mockReset()
     completeMock.mockReset()
@@ -55,6 +65,58 @@ describe("reports facade automatic throttling", () => {
     addLogsMock.mockResolvedValue({stored: 1})
     completeMock.mockResolvedValue({status: "complete"})
     getRecentLogsMock.mockReturnValue([])
+  })
+
+  afterEach(() => {
+    stopMentraJSCrashloopReportService()
+    resetForTests()
+    jest.useRealTimers()
+  })
+
+  it("blocks real repeated crash-loop notifications and pairing timeouts before collecting or uploading", async () => {
+    configure({auth: {}, config: {automaticReportsEnabled: false}})
+    jest.useFakeTimers()
+    startMentraJSCrashloopReportService()
+    const crashes = new MentraJSCrashController({maxRetries: 3})
+    const packageName = "com.openalma.mentra"
+    for (let attempt = 0; attempt < 5; attempt++) {
+      crashes.onSpawn(packageName)
+      if (crashes.onCrash(packageName, "missed_ping").surfaceCrashloopBanner) {
+        islandNotifications.emit({kind: "miniapp_crashloop", packageName, reason: "missed_ping", timestamp: Date.now()})
+      }
+    }
+    expect(crashes.stateFor(packageName)?.kind).toBe("CRASHLOOP_DISABLED")
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ready = pairing.waitForReady({deviceModel: "Mentra Live", deviceName: "TEST_GLASSES", timeoutMs: 1000})
+      jest.advanceTimersByTime(1000)
+      await expect(ready).resolves.toBe(false)
+    }
+    await Promise.resolve()
+    expect(collectDiagnosticContext).not.toHaveBeenCalled()
+    expect(getRecentLogsMock).not.toHaveBeenCalled()
+    expect(submitMock).not.toHaveBeenCalled()
+    expect(addLogsMock).not.toHaveBeenCalled()
+    expect(cloudClientService.core.reports.addScreenshots).not.toHaveBeenCalled()
+    expect(completeMock).not.toHaveBeenCalled()
+    expect(cloudClientService.syncCoreTokenToBluetooth).not.toHaveBeenCalled()
+    await expect(submitAutomaticReport(automaticInput("disabled"))).resolves.toEqual({status: "skipped", reason: "automatic_reports_disabled"})
+  })
+
+  it("allows manual bug and feedback reports with automatic reports disabled", async () => {
+    configure({auth: {}, config: {automaticReportsEnabled: false}})
+    submitMock.mockResolvedValue({reportId: "manual", status: "open"})
+    getRecentLogsMock.mockReturnValue([{timestamp: 1, level: "info", message: "diagnostic lengths"}])
+    await expect(reports.submit({kind: "bug", trigger: {type: "manual", source: "settings", reason: "user_report"}, report: {actualBehavior: "Fictional bug"}})).resolves.toMatchObject({status: "submitted"})
+    await expect(reports.submit({kind: "feedback", feedback: {text: "Fictional feedback"}})).resolves.toMatchObject({status: "submitted"})
+    expect(submitMock).toHaveBeenCalledTimes(2)
+    expect(addLogsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps automatic reports enabled for Stock/OEM hosts", async () => {
+    configure({auth: {}, config: {automaticReportsEnabled: true}})
+    submitMock.mockResolvedValue({reportId: "stock", status: "open"})
+    await expect(submitAutomaticReport(automaticInput("stock"))).resolves.toMatchObject({status: "submitted"})
+    expect(submitMock).toHaveBeenCalledTimes(1)
   })
 
   it("does not collect or submit reports when Core is unavailable", async () => {

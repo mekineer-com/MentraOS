@@ -28,7 +28,7 @@ export function createOfficialManifest(): DeploymentManifest {
     appUpdates: {
       mode: "store",
       storeUrls: {android: isOpenAlmaHost() ? OPENALMA_HOST_RELEASES_URL : PLAY_STORE_URL, ios: APP_STORE_URL},
-      reviewUrls: {android: PLAY_STORE_URL, ios: APP_STORE_REVIEW_URL},
+      reviewUrls: {android: isOpenAlmaHost() ? null : PLAY_STORE_URL, ios: APP_STORE_REVIEW_URL},
     },
     content: {
       wallpaperUrls: [
@@ -57,7 +57,7 @@ export function createOfficialManifest(): DeploymentManifest {
       onDeviceSpeech: true,
       navigation: process.env.EXPO_PUBLIC_DEPLOYMENT_REGION !== "china",
     },
-    telemetry: true,
+    telemetry: !isOpenAlmaHost(),
   }
 }
 

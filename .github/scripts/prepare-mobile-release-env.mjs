@@ -3,7 +3,7 @@ import {readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
 import {fileURLToPath} from "node:url"
 
-const CLOUDS = {
+export const CLOUDS = {
   dev: {
     core: "https://core.dev.us-west-2.mentraglass.com",
     runtime: "https://runtime.dev.us-west-2.mentraglass.com",

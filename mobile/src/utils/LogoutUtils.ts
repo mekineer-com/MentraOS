@@ -1,6 +1,8 @@
 import {SessionRevocationError} from "@mentra/cloud-client"
 import {engine} from "@mentra/engine"
+import * as Application from "expo-application"
 
+import {OPENALMA_ADDRESS_KEY, OPENALMA_HOST_PACKAGE} from "@/effects/irisUpdateOffer"
 import mantle from "@/services/MantleManager"
 import {settleFrame} from "@/utils/settleFrame"
 import GlobalEventEmitter from "@/utils/GlobalEventEmitter"
@@ -174,8 +176,15 @@ export class LogoutUtils {
 
     // burn it all:
     try {
+      const address = Application.applicationId === OPENALMA_HOST_PACKAGE
+        ? storage.load<string>(OPENALMA_ADDRESS_KEY)
+        : null
       engine.settings.resetAllLocal()
       storage.clearAll()
+      if (address?.is_ok()) {
+        const restored = storage.save(OPENALMA_ADDRESS_KEY, address.value)
+        if (restored.is_error()) throw restored.error
+      }
     } catch (error) {
       console.error(`${this.TAG}: Error clearing app settings:`, error)
     }

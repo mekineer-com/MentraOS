@@ -11,6 +11,9 @@ import {deploymentManifestSchema} from "./schema"
 import {deploymentStore, DeploymentStore, type DeploymentStorage} from "./store"
 import type {ActiveDeployment, DeploymentCandidate} from "./types"
 
+let mockApplicationId = "com.mentra.mentra"
+jest.mock("expo-application", () => ({get applicationId() {return mockApplicationId}}))
+
 jest.mock("@/utils/cloudClient/devHost", () => ({METRO_AUTO: "metro-auto", devServerHost: jest.fn()}))
 
 const originalCore = process.env.EXPO_PUBLIC_CLOUD_CORE_URL
@@ -44,6 +47,7 @@ const workspace: DeploymentCandidate = {
 }
 
 beforeEach(async () => {
+  mockApplicationId = "com.mentra.mentra"
   jest.clearAllMocks()
   process.env.EXPO_PUBLIC_CLOUD_CORE_URL = "https://core.build.example"
   process.env.EXPO_PUBLIC_CLOUD_RUNTIME_URL = "https://runtime.build.example"
@@ -166,13 +170,21 @@ it("keeps overrides on a normal restart while rebuilding official defaults from 
 })
 
 it("retains workspace capability limits and official OTA fallback policy", async () => {
+  expect(deploymentCloudConfigValues(deploymentStore.getActive()).automaticReportsEnabled).toBe(true)
   expect(deploymentCloudConfigValues(deploymentStore.getActive()).allowLegacyOtaFallback).toBe(true)
   await deploymentStore.activate(workspace)
+  expect(deploymentStore.getActive().manifest.telemetry).toBe(false)
+  expect(deploymentCloudConfigValues(deploymentStore.getActive()).automaticReportsEnabled).toBe(true)
   expect(deploymentCloudConfigValues(deploymentStore.getActive())).toMatchObject({
     features: {nativeMeetings: false, cloudSpeech: false, onDeviceSpeech: false, navigation: false},
     runtimeRealtimeSession: false,
     allowLegacyOtaFallback: false,
   })
+})
+
+it("disables automatic reports only for the OpenAlma package", () => {
+  mockApplicationId = "com.mentra.mentra.openalma"
+  expect(deploymentCloudConfigValues(deploymentStore.getActive()).automaticReportsEnabled).toBe(false)
 })
 
 it("preserves legacy overrides when restoring an existing consumer login after upgrade", async () => {

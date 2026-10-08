@@ -18,6 +18,7 @@ import * as Sentry from "@sentry/react-native"
 import {ensureMiniappEngine, getMiniappEngine, type MiniappEngine} from "@mentra/engine-host-internal"
 
 import {installStreamPreviewCoordinator} from "@/services/streamPreview"
+import {isOpenAlmaHost} from "@/services/openAlmaHostUpdate"
 import showAlert from "@/utils/AlertUtils"
 
 const MENTRA_JS_ENGINE = Platform.OS === "ios" ? "jsc" : "quickjs"
@@ -52,15 +53,17 @@ export function bootstrapMentraJS() {
   router.onCrashloop = (packageName: string, reason: string) => {
     // Sentry first (best-effort) so we don't lose telemetry if the rest
     // of the chain throws.
-    const lastLogLines = router.logRing.snapshot(packageName)
-    try {
-      Sentry.captureMessage(`MentraJS crashloop disabled: ${packageName}`, {
-        level: "error",
-        tags: baseTags(packageName),
-        extra: {reason, lastLogLines},
-      })
-    } catch {
-      /* Sentry not initialized in dev */
+    if (!isOpenAlmaHost()) {
+      const lastLogLines = router.logRing.snapshot(packageName)
+      try {
+        Sentry.captureMessage(`MentraJS crashloop disabled: ${packageName}`, {
+          level: "error",
+          tags: baseTags(packageName),
+          extra: {reason, lastLogLines},
+        })
+      } catch {
+        /* Sentry not initialized in dev */
+      }
     }
 
     // Look up the miniapp's display name for the alert + report.
@@ -71,11 +74,14 @@ export function bootstrapMentraJS() {
     // still sees something.
     showAlert(
       `${appName} stopped working`,
-      "We've filed a bug report. Try opening it again later — if the issue persists, please send us feedback.",
+      !isOpenAlmaHost()
+        ? "We've filed a bug report. Try opening it again later — if the issue persists, please send us feedback."
+        : "Try opening it again later. If the issue persists, you can send feedback manually.",
       [{text: "OK"}],
     )
   }
   router.onRestartToast = (packageName: string, reason: string) => {
+    if (isOpenAlmaHost()) return
     try {
       Sentry.addBreadcrumb({
         category: "miniapp.respawn",

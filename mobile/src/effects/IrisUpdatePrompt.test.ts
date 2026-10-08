@@ -52,6 +52,7 @@ jest.mock("@/contexts/ThemeContext", () => ({useAppTheme: () => ({theme: {
 }})}))
 jest.mock("@/stores/navigation", () => ({useNavigationStore: {getState: () => ({push: jest.fn()})}}))
 jest.mock("@/stores/capsule", () => ({useRegisterCapsule: jest.fn()}))
+jest.mock("react-native-gesture-handler", () => ({ScrollView: require("react-native").ScrollView}))
 jest.mock("@/components/ui/Group", () => ({Group: require("react-native").View}))
 jest.mock("@/components/ignite", () => ({
   Screen: require("react-native").View, Icon: () => null,

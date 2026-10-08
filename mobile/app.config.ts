@@ -280,7 +280,10 @@ module.exports = ({config}: ConfigContext): Partial<ExpoConfig> => {
           // support profiles are a separate per-account diagnostic and do not
           // replace them. The lane lets PostHog separate store builds from the
           // dev and staging release lanes that share this bundle id.
-          analytics: {environment: process.env.EXPO_PUBLIC_BUILD_ENV || "dev"},
+          analytics: {
+            enabled: androidPackage !== "com.mentra.mentra.openalma",
+            environment: process.env.EXPO_PUBLIC_BUILD_ENV || "dev",
+          },
         },
       ],
       // "./plugins/withSplashScreen.ts",

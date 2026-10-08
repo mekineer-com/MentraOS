@@ -228,6 +228,21 @@ if (project.hasProperty("sentryUploadEnabled") && project.property("sentryUpload
       )
     }
 
+    // Refresh independently of credentials so existing generated projects get the guard too.
+    const forkSigningGuard = `
+// OpenAlma release signing guard
+gradle.taskGraph.whenReady { graph ->
+    if (${getAndroidPackageName(config) === "com.mentra.mentra.openalma"} && graph.allTasks.any { it.project == project && it.name.toLowerCase().contains('release') }) {
+        if (releaseKeystoreFile == null || !releaseStorePassword.toString().trim() || !releaseKeyPassword.toString().trim()) {
+            throw new GradleException("OpenAlma release requires a release keystore, MENTRAOS_UPLOAD_STORE_PASSWORD and MENTRAOS_UPLOAD_KEY_PASSWORD")
+        }
+    }
+}
+// End OpenAlma release signing guard
+`
+    buildGradle = buildGradle.replace(/\n\/\/ OpenAlma release signing guard\n[\s\S]*?\/\/ End OpenAlma release signing guard\n/g, "")
+    buildGradle += forkSigningGuard
+
     // 2. Add externalNativeBuild configuration in defaultConfig
     if (!buildGradle.includes("externalNativeBuild")) {
       buildGradle = buildGradle.replace(

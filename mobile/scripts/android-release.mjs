@@ -1,10 +1,12 @@
 #!/usr/bin/env zx
 
 import "zx/globals"
-import {readFile, writeFile} from "fs/promises"
+import {constants} from "fs"
+import {copyFile, readFile, writeFile} from "fs/promises"
 import {setBuildEnv} from './set-build-env.mjs';
 import {syncAutolinkingCache} from './clear-autolinking-cache.mjs';
-import {resolveAndroidPackageName} from './android-package-name.cjs';
+import {VARIANT_RE, resolveAndroidPackageName} from './android-package-name.cjs';
+import {CLOUDS} from '../../.github/scripts/prepare-mobile-release-env.mjs';
 
 // build only for real devices new arch:
 process.env.ORG_GRADLE_PROJECT_reactNativeArchitectures = 'arm64-v8a'
@@ -19,10 +21,39 @@ process.env.ORG_GRADLE_PROJECT_reactNativeArchitectures = 'arm64-v8a'
 // app.config.ts agree on the package. Autolinking is checked once, after
 // prebuild, so a stale base-package cache cannot survive into assembleRelease.
 const nameSuffix = argv.name ? String(argv.name).trim() : null
+if (argv.name !== undefined && (!nameSuffix || !VARIANT_RE.test(nameSuffix))) {
+  throw new Error('Invalid --name build variant')
+}
 if (nameSuffix) {
   process.env.MENTRAOS_BUILD_NAME = nameSuffix
 }
+for (let number = 1; ; number++) {
+  try {
+    await copyFile('.env', number === 1 ? '.env.orig' : `.env${number}.orig`, constants.COPYFILE_EXCL)
+    break
+  } catch (error) {
+    if (error.code === 'ENOENT') break
+    if (error.code !== 'EEXIST') throw error
+  }
+}
 await setBuildEnv({syncAutolinking: false});
+const isOpenAlmaBuild = resolveAndroidPackageName().endsWith('.openalma')
+const forkPackage = 'com.mentra.mentra.openalma'
+if (isOpenAlmaBuild && !process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
+  const {version} = JSON.parse(await readFile('../package.json', 'utf-8'))
+  const releaseEnv = {
+    EXPO_PUBLIC_MENTRAOS_VERSION: version,
+    EXPO_PUBLIC_BUILD_ENV: 'prod',
+    EXPO_PUBLIC_CLOUD_CORE_URL: CLOUDS.prod.core,
+    EXPO_PUBLIC_CLOUD_RUNTIME_URL: CLOUDS.prod.runtime,
+  }
+  let env = await readFile('.env', 'utf-8')
+  for (const [key, value] of Object.entries(releaseEnv)) {
+    process.env[key] = value
+    env = env.replace(new RegExp(`^${key}=.*\\r?\\n?`, 'gm'), '') + `\n${key}=${value}\n`
+  }
+  await writeFile('.env', env)
+}
 
 console.log('Building Android release...');
 if (nameSuffix) {
@@ -31,6 +62,12 @@ if (nameSuffix) {
 
 // Prebuild Android (reads MENTRAOS_BUILD_NAME via app.config.ts)
 await $({ stdio: 'inherit' })`bun expo prebuild --platform android`;
+if (isOpenAlmaBuild) {
+  const gradle = await readFile('android/app/build.gradle', 'utf-8')
+  if (!new RegExp(`applicationId\\s+['"]${forkPackage.replaceAll('.', '\\.')}['"]`).test(gradle)) {
+    throw new Error(`Generated Android release must use ${forkPackage}`)
+  }
+}
 
 // Authoritative post-prebuild guard (same as android.mjs): compare the resolved
 // graph and generated applicationId to the cached artifact, then wipe if a
@@ -67,6 +104,16 @@ await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-dae
 // Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
 // Mentra Live glasses are also attached (adb fails on "more than one device").
 const apkPath = 'android/app/build/outputs/apk/release/app-release.apk'
+if (isOpenAlmaBuild) {
+  const metadata = JSON.parse(await readFile('android/app/build/outputs/apk/release/output-metadata.json', 'utf-8'))
+  const apk = metadata.elements?.find((entry) => entry.outputFile === 'app-release.apk')
+  if (metadata.applicationId !== forkPackage || !apk || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(apk.versionName) || !Number.isSafeInteger(apk.versionCode) || apk.versionCode < 1) {
+    throw new Error('Invalid OpenAlma release APK identity or version metadata')
+  }
+  const publicationPath = `android/app/build/outputs/apk/release/OpenAlma-Mentra-${apk.versionName}-${apk.versionCode}.apk`
+  await copyFile(apkPath, publicationPath)
+  console.log(`Publication APK: ${publicationPath}`)
+}
 const serial = await resolveAdbSerial()
 console.log(`Installing APK on ${serial}...`)
 await $({stdio: 'inherit'})`adb -s ${serial} install -r ${apkPath}`

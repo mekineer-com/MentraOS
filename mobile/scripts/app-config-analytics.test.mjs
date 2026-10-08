@@ -5,18 +5,21 @@ import test from "node:test"
 // Guards the regression that silently zeroed glasses WAU: from 2026-08-11 every
 // dev/beta build shipped with `analytics: false` on the Bluetooth SDK plugin.
 // The SDK's usage analytics are the source of truth for WAU, so the Mentra App
-// must always leave them enabled and declare its build lane. Resolved through
-// `expo config`, the same path prebuild uses, so what is asserted is what ships.
+// Stock must leave them enabled and declare its build lane; OpenAlma opts out.
+// Evaluate the same app.config factory prebuild consumes, without loading unrelated plugins.
 
-function bluetoothSdkPluginProps() {
+function bluetoothSdkPluginProps(buildName = "") {
   let json
   try {
-    json = execFileSync("npx", ["expo", "config", "--json", "--type", "prebuild"], {
+    json = execFileSync(process.execPath, [
+      "--import", "tsx", "-e", 'console.log(JSON.stringify(require("./app.config.ts")({config: {}})))',
+    ], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         EXPO_NO_TELEMETRY: "1",
+        MENTRAOS_BUILD_NAME: buildName,
         // app.config.ts refuses to build without a Mapbox token in CI. The token
         // has nothing to do with this check, so supply the same placeholder
         // .env.example ships when the environment has none.
@@ -39,12 +42,17 @@ function bluetoothSdkPluginProps() {
   return entry[1] ?? {}
 }
 
-test("the Mentra App never disables the Bluetooth SDK's usage analytics", () => {
+test("Stock Mentra keeps the Bluetooth SDK's usage analytics", () => {
   const {analytics} = bluetoothSdkPluginProps()
   assert.notEqual(analytics, false, "analytics: false would zero glasses WAU for every Mentra App install")
   if (analytics && typeof analytics === "object") {
     assert.notEqual(analytics.enabled, false)
   }
+})
+
+test("OpenAlma disables native Bluetooth SDK analytics, including queued retries", () => {
+  const {analytics} = bluetoothSdkPluginProps("openalma")
+  assert.equal(analytics.enabled, false)
 })
 
 test("the Mentra App declares its build lane so store installs are separable from dev and staging", () => {

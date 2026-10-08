@@ -28,6 +28,8 @@ export interface IslandAuth {
 }
 
 export interface IslandConfigValues {
+  /** Host opt-out from automatic diagnostics. Omitted preserves OEM defaults. */
+  automaticReportsEnabled?: boolean
   /** Workspace calls use Runtime credentials and cannot access the public Call backend. */
   privateMeetings?: boolean
   /** cloud-v2 core service base URL (defaults resolved by the cloud client). */

@@ -18,6 +18,7 @@ import {SETTINGS, engine} from "@mentra/engine"
 import {devServerHost} from "@/utils/cloudClient/devHost"
 import {deploymentStore, type ActiveDeployment} from "@/services/deployment"
 import {deploymentDebugScope, resolveDeploymentManifest} from "@/services/deployment/debugOverrides"
+import {isOpenAlmaHost} from "@/services/openAlmaHostUpdate"
 
 type Lc3FrameSizeBytes = 20 | 40 | 60
 
@@ -40,6 +41,7 @@ export function lc3FrameSizeBytes(): Lc3FrameSizeBytes {
  * resolved endpoints + the live LC3 frame size.
  */
 export function cloudConfigValues(): {
+  automaticReportsEnabled: boolean
   privateMeetings?: boolean
   coreUrl: string | null
   runtimeUrl: string | null
@@ -82,6 +84,7 @@ export function deploymentCloudConfigValues(deployment: ActiveDeployment): Retur
       ? `mentra.cloud-client.${manifest.deploymentId}.${encodeURIComponent(deployment.workspaceOrigin)}.refreshToken`
       : undefined
   return {
+    automaticReportsEnabled: !isOpenAlmaHost(),
     privateMeetings: deployment.kind === "workspace",
     coreUrl: manifest.services.coreUrl,
     runtimeUrl: manifest.services.runtimeUrl,
