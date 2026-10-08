@@ -5,7 +5,7 @@ import * as Sentry from "@sentry/react-native"
 import {useFonts} from "expo-font"
 import {useNavigationContainerRef} from "expo-router"
 import * as SplashScreen from "expo-splash-screen"
-import {useEffect, useState} from "react"
+import {useEffect, useRef, useState} from "react"
 import {Platform} from "react-native"
 
 import {SentryNavigationIntegration, SentrySetup} from "@/effects/SentrySetup"
@@ -44,6 +44,7 @@ SplashScreen.setOptions({
 let previousRootUnmounted = false
 
 function Root() {
+  const launch = useRef({})
   const [fontsLoaded, fontError] = useFonts(customFontsToLoad)
   const [loaded, setLoaded] = useState(false)
   // Android can retain fallback-font measurements if text mounts before our
@@ -107,7 +108,7 @@ function Root() {
 
   return (
     <AllProviders>
-      <AllEffects />
+      <AllEffects launch={launch.current} />
     </AllProviders>
   )
 }

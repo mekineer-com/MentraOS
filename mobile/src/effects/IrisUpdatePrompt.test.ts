@@ -17,6 +17,7 @@ import {isIrisOffer, openAlmaAddresses, parseIrisSetupOffer} from "./irisUpdateO
 
 let mockApplicationId = "com.mentra.mentra.openalma"
 let mockDeploymentKind = "consumer"
+let mockForegroundPackage: string | null = null
 jest.mock("@/services/deployment", () => ({
   deploymentStore: {getActive: () => ({kind: mockDeploymentKind})},
   useDeployment: () => ({activeDeployment: {kind: mockDeploymentKind}}),
@@ -40,6 +41,7 @@ jest.mock("@mentra/engine", () => ({
   engine: {miniapps: {refresh: jest.fn(), setForeground: jest.fn()}},
   SETTINGS: {debug_mode: {key: "debug"}, super_mode: {key: "super"}, appearance_menu_enabled: {key: "appearance"}},
   useSetting: () => [false],
+  useForegroundApp: () => mockForegroundPackage ? {packageName: mockForegroundPackage} : null,
 }))
 jest.mock("@/components/dev/VersionInfo", () => ({VersionInfo: () => null}))
 jest.mock("@/components/settings/DeviceSettingsSection", () => ({DeviceSettingsSection: () => null}))
@@ -74,6 +76,9 @@ beforeEach(() => {
   ;(localMiniappRuntime.getSimpleStorage as jest.Mock).mockReset()
   mockApplicationId = "com.mentra.mentra.openalma"
   mockDeploymentKind = "consumer"
+  mockForegroundPackage = null
+  ;(storage.load as jest.Mock).mockImplementation(() => ({is_ok: () => false}))
+  ;(storage.save as jest.Mock).mockImplementation(() => ({is_error: () => false}))
   Object.defineProperty(AppState, "currentState", {configurable: true, value: "active"})
   global.fetch = jest.fn()
 })
@@ -89,13 +94,12 @@ test("Settings reuses the address editor and opens only an available host update
       ([props]) => props.labelTx === "firstconnection:serverAddress" && props.value === "http://10.77.0.1",
     ),
   ).toBe(true)
-  expect(storage.load).toHaveBeenCalledTimes(1)
   expect(storage.load).toHaveBeenCalledWith("openalma.server-address")
   expect(storage.save).not.toHaveBeenCalled()
   expect((RouteButton as jest.Mock).mock.calls.some(([props]) => props.label === "mentraUpdate:update")).toBe(false)
   const downloadUrl = "https://github.com/mekineer-com/MentraOS/releases/download/v3.2.2/OpenAlma.apk"
   const open = jest.spyOn(Linking, "openURL").mockResolvedValue(undefined)
-  act(() => useOpenAlmaHostUpdate.setState({release: {version: "3.2.2", downloadUrl}}))
+  act(() => useOpenAlmaHostUpdate.setState({release: {version: "3.2.2", buildNumber: 54000002, downloadUrl}}))
   const [update] = (RouteButton as jest.Mock).mock.calls.find(([props]) => props.label === "mentraUpdate:update")!
   await act(async () => update.onPress())
   expect(open).toHaveBeenCalledWith(downloadUrl)
@@ -490,6 +494,10 @@ test("a stale registry read cannot resurrect guidance after an install event", a
 })
 
 test("the editor saves only the normalized phone address and clears guidance on success", async () => {
+  ;(storage.save as jest.Mock).mockImplementation((_key, value) => {
+    ;(storage.load as jest.Mock).mockReturnValue({is_ok: () => true, value})
+    return {is_error: () => false}
+  })
   useFirstConnection.setState({error: "Offline", irisInstalled: false})
   global.fetch = jest.fn(async () => ({
     ok: true,
@@ -513,6 +521,49 @@ test("the editor saves only the normalized phone address and clears guidance on 
     "openalma.host",
     expect.any(String),
   )
+  view.unmount()
+})
+
+test("retained address editors resnapshot on overlay changes and unchanged blur cannot overwrite a save", async () => {
+  let savedAddress = "http://alpha.example"
+  ;(storage.load as jest.Mock).mockImplementation(() => ({is_ok: () => true, value: savedAddress}))
+  ;(storage.save as jest.Mock).mockImplementation((_key, value) => {
+    savedAddress = value
+    return {is_error: () => false}
+  })
+  global.fetch = jest.fn(async () => {throw new Error("Offline")}) as unknown as typeof fetch
+  const pair = () => createElement("View", null,
+    createElement(OpenAlmaAddressEditor, {probeOnMount: false}),
+    createElement(OpenAlmaAddressEditor, {probeOnMount: false}))
+  const view = render(pair())
+  mockForegroundPackage = "com.mentra.settings"
+  view.rerender(pair())
+  await act(async () => view.UNSAFE_getAllByType(TextField)[1].props.onChangeText("http://bravo.example"))
+  await act(async () => view.UNSAFE_getAllByType(TextField)[1].props.onEndEditing())
+  expect(savedAddress).toBe("http://bravo.example")
+  mockForegroundPackage = null
+  view.rerender(pair())
+  expect(view.UNSAFE_getAllByType(TextField)[0].props.value).toBe("http://bravo.example")
+  await act(async () => view.UNSAFE_getAllByType(TextField)[0].props.onEndEditing())
+  expect(savedAddress).toBe("http://bravo.example")
+  expect(storage.save).toHaveBeenCalledTimes(1)
+  view.unmount()
+})
+
+test("an old address failure cannot restore guidance after a new address succeeds", async () => {
+  let savedAddress = "http://alpha.example"
+  let rejectOld!: (error: Error) => void
+  ;(storage.load as jest.Mock).mockImplementation(() => ({is_ok: () => true, value: savedAddress}))
+  global.fetch = jest.fn((url: string) => url.startsWith(savedAddress) && savedAddress.includes("alpha")
+    ? new Promise((_resolve, reject) => {rejectOld = reject})
+    : Promise.resolve({ok: true, json: async () => ({user_id: "Test User"})})) as unknown as typeof fetch
+  const view = render(createElement(IrisUpdatePrompt))
+  await waitFor(() => expect(rejectOld).toBeDefined())
+  savedAddress = "http://bravo.example"
+  await reportOpenAlmaHost(savedAddress)
+  useFirstConnection.setState({error: null})
+  await act(async () => rejectOld(new Error("Offline")))
+  expect(useFirstConnection.getState().error).toBeNull()
   view.unmount()
 })
 

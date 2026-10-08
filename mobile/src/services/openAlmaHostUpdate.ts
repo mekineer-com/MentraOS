@@ -9,7 +9,7 @@ export const OPENALMA_HOST_RELEASES_URL = "https://github.com/mekineer-com/Mentr
 const RELEASE_API_URL = "https://api.github.com/repos/mekineer-com/MentraOS/releases/latest"
 const DOWNLOAD_BASE_URL = "https://github.com/mekineer-com/MentraOS/releases/download/"
 
-export type OpenAlmaHostRelease = {version: string; downloadUrl: string}
+export type OpenAlmaHostRelease = {version: string; buildNumber: number; downloadUrl: string}
 
 export const useOpenAlmaHostUpdate = create<{
   release: OpenAlmaHostRelease | null
@@ -28,33 +28,41 @@ export function parseOpenAlmaHostRelease(value: unknown): OpenAlmaHostRelease | 
   if (!version || semver.prerelease(version) || !Array.isArray(release.assets)) return null
 
   const prefix = `${DOWNLOAD_BASE_URL}${encodeURIComponent(release.tag_name)}/`
-  const apk = release.assets.find((value: unknown) => {
-    if (!value || typeof value !== "object") return false
+  let latest: OpenAlmaHostRelease | null = null
+  for (const value of release.assets) {
+    if (!value || typeof value !== "object") continue
     const asset = value as Record<string, unknown>
-    return (
-      typeof asset.name === "string" &&
-      /openalma/i.test(asset.name) &&
-      /\.apk$/i.test(asset.name) &&
-      asset.state === "uploaded" &&
-      typeof asset.size === "number" &&
-      asset.size > 0 &&
-      asset.browser_download_url === `${prefix}${encodeURIComponent(asset.name)}`
-    )
-  }) as {browser_download_url: string} | undefined
-  return apk ? {version, downloadUrl: apk.browser_download_url} : null
+    const namePrefix = `OpenAlma-Mentra-${version}-`
+    if (typeof asset.name !== "string" || !asset.name.startsWith(namePrefix) || !asset.name.endsWith(".apk")) continue
+    const build = asset.name.slice(namePrefix.length, -4)
+    const buildNumber = Number(build)
+    if (!/^[1-9]\d*$/.test(build) || !Number.isSafeInteger(buildNumber)
+        || asset.state !== "uploaded" || typeof asset.size !== "number" || asset.size <= 0
+        || asset.browser_download_url !== `${prefix}${encodeURIComponent(asset.name)}`) continue
+    if (!latest || buildNumber > latest.buildNumber) {
+      latest = {version, buildNumber, downloadUrl: asset.browser_download_url as string}
+    }
+  }
+  return latest
 }
 
-// Kept for the JS process lifetime, including failed checks and effect remounts.
+let currentLaunch: object | undefined
 let launchCheck: Promise<OpenAlmaHostRelease | null> | undefined
 
-export function checkOpenAlmaHostUpdate(): Promise<OpenAlmaHostRelease | null> {
+export function checkOpenAlmaHostUpdate(launch: object): Promise<OpenAlmaHostRelease | null> {
   if (!isOpenAlmaHost()) return Promise.resolve(null)
-  return (launchCheck ??= checkRelease())
+  if (currentLaunch !== launch) {
+    currentLaunch = launch
+    launchCheck = undefined
+    useOpenAlmaHostUpdate.setState({release: null})
+  }
+  return (launchCheck ??= checkRelease(launch))
 }
 
-async function checkRelease(): Promise<OpenAlmaHostRelease | null> {
+async function checkRelease(launch: object): Promise<OpenAlmaHostRelease | null> {
   const currentVersion = semver.valid(Application.nativeApplicationVersion ?? "")
-  if (!currentVersion) return null
+  const currentBuild = Number(Application.nativeBuildVersion)
+  if (!currentVersion || !Number.isSafeInteger(currentBuild) || currentBuild < 1) return null
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
@@ -63,12 +71,12 @@ async function checkRelease(): Promise<OpenAlmaHostRelease | null> {
       signal: controller.signal,
     })
     const release = response.ok ? parseOpenAlmaHostRelease(await response.json()) : null
-    const newer = release && semver.gt(release.version, currentVersion) ? release : null
-    useOpenAlmaHostUpdate.setState({release: newer})
+    const newer = release && semver.gte(release.version, currentVersion) && release.buildNumber > currentBuild ? release : null
+    if (currentLaunch === launch) useOpenAlmaHostUpdate.setState({release: newer})
     return newer
   } catch (error) {
     console.warn("OpenAlma Mentra release check unavailable:", error)
-    useOpenAlmaHostUpdate.setState({release: null})
+    if (currentLaunch === launch) useOpenAlmaHostUpdate.setState({release: null})
     return null
   } finally {
     clearTimeout(timeout)

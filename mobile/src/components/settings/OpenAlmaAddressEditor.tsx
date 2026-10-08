@@ -1,4 +1,5 @@
-import {useEffect, useState} from "react"
+import {useEffect, useRef, useState} from "react"
+import {useForegroundApp} from "@mentra/engine"
 
 import {TextField} from "@/components/ignite"
 import {reportOpenAlmaHost, savedOpenAlmaAddress, useFirstConnection} from "@/effects/IrisUpdatePrompt"
@@ -10,9 +11,17 @@ export function OpenAlmaAddressEditor({probeOnMount = true, error}: {probeOnMoun
   const [openAlmaAddress, setOpenAlmaAddress] = useState(savedOpenAlmaAddress)
   const [addressPending, setAddressPending] = useState(false)
   const [addressError, setAddressError] = useState<string | null>(null)
+  const foregroundApp = useForegroundApp()
+  const edited = useRef(false)
+  useEffect(() => {
+    setOpenAlmaAddress(savedOpenAlmaAddress())
+    setAddressError(null)
+    edited.current = false
+  }, [foregroundApp?.packageName])
   const saveAddress = async (save = true) => {
     setAddressPending(true)
     setAddressError(null)
+    let reportingAddress: string | undefined
     try {
       const {baseUrl} = openAlmaAddresses(openAlmaAddress)
       if (save) {
@@ -20,10 +29,13 @@ export function OpenAlmaAddressEditor({probeOnMount = true, error}: {probeOnMoun
         if (saved.is_error()) throw saved.error
       }
       setOpenAlmaAddress(baseUrl)
+      reportingAddress = baseUrl
       await reportOpenAlmaHost(baseUrl)
-      useFirstConnection.setState({error: null})
+      if (baseUrl === savedOpenAlmaAddress()) useFirstConnection.setState({error: null})
     } catch (error) {
-      setAddressError(error instanceof Error ? error.message : String(error))
+      if (!reportingAddress || reportingAddress === savedOpenAlmaAddress()) {
+        setAddressError(error instanceof Error ? error.message : String(error))
+      }
     } finally {
       setAddressPending(false)
     }
@@ -37,8 +49,8 @@ export function OpenAlmaAddressEditor({probeOnMount = true, error}: {probeOnMoun
     <TextField
       labelTx="firstconnection:serverAddress"
       value={openAlmaAddress}
-      onChangeText={setOpenAlmaAddress}
-      onEndEditing={() => void saveAddress()}
+      onChangeText={(value) => { edited.current = true; setOpenAlmaAddress(value) }}
+      onEndEditing={() => { if (edited.current) { edited.current = false; void saveAddress() } }}
       autoCapitalize="none"
       autoCorrect={false}
       returnKeyType="done"

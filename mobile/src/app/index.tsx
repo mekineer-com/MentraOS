@@ -2,7 +2,6 @@ import {useRootNavigationState} from "expo-router"
 import {useState, useEffect, useRef, useCallback} from "react"
 import {View, ActivityIndicator, Platform, Linking} from "react-native"
 import semver from "semver"
-import * as Application from "expo-application"
 
 import {Button, Header, Icon, Screen, Text} from "@/components/ignite"
 import {MentraLogoStandalone} from "@/components/brands/MentraLogoStandalone"
@@ -18,7 +17,7 @@ import {resolvedEndpoints} from "@/services/cloudClient"
 import {fetchMinimumClientVersion} from "@/utils/cloudVersion"
 import {useDeployment} from "@/services/deployment"
 import {deploymentDebugOverrides, saveDeploymentCloudOverrides} from "@/services/deployment/debugOverrides"
-import {OPENALMA_HOST_PACKAGE} from "@/effects/irisUpdateOffer"
+import {isOpenAlmaHost} from "@/services/openAlmaHostUpdate"
 
 // Types
 type ScreenState = "loading" | "connection" | "outdated" | "success"
@@ -85,9 +84,7 @@ export default function InitScreen() {
   // Helper Functions
   const getLocalVersion = (): string | null => {
     try {
-      return Application.applicationId === OPENALMA_HOST_PACKAGE
-        ? Application.nativeApplicationVersion
-        : process.env.EXPO_PUBLIC_MENTRAOS_VERSION || null
+      return process.env.EXPO_PUBLIC_MENTRAOS_VERSION || null
     } catch (error) {
       console.error("Error getting local version:", error)
       return null
@@ -234,7 +231,7 @@ export default function InitScreen() {
       setCachedRequiredVersion(`${CACHED_VERSION_SOURCE}${required}`)
     }
 
-    if (semver.lt(localVer, recommended)) {
+    if (semver.lt(localVer, isOpenAlmaHost() ? required : recommended)) {
       setLocalVersion(localVer)
       setCloudVersion(recommended)
       setCanSkipUpdate(!semver.lt(localVer, required))

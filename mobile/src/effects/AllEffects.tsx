@@ -20,7 +20,7 @@ import {useDeployment} from "@/services/deployment"
 // import WhisperTest from "@/effects/WhisperTest"
 // import SherpaTest from "@/effects/SherpaTest"
 
-export const AllEffects = () => {
+export const AllEffects = ({launch}: {launch: object}) => {
   const {selectionResolved} = useDeployment()
 
   return (
@@ -45,7 +45,7 @@ export const AllEffects = () => {
           <PhoneWifiOverlay />
           <MemoryWarningMonitor />
           <IrisUpdatePrompt />
-          <OpenAlmaHostUpdateChecker />
+          <OpenAlmaHostUpdateChecker launch={launch} />
         </>
       )}
     </>

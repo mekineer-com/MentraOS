@@ -160,7 +160,7 @@ test.each([false, true])("only Settings shows the host-update indicator, allApps
   expect(labelContainers("Settings", originalLabelClass).length).toBeGreaterThan(0)
   act(() =>
     useOpenAlmaHostUpdate.setState({
-      release: {version: "3.2.2", downloadUrl: "https://example.com/OpenAlma.apk"},
+      release: {version: "3.2.2", buildNumber: 54000002, downloadUrl: "https://example.com/OpenAlma.apk"},
     }),
   )
   expect(screen.getAllByText("!")).toHaveLength(1)

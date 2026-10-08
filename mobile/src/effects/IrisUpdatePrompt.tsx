@@ -96,9 +96,9 @@ export function IrisUpdatePrompt() {
         let deviceSessionId: string
         try {
           deviceSessionId = await reportOpenAlmaHost(baseUrl)
-          if (!disposed) useFirstConnection.setState({error: null})
+          if (!disposed && baseUrl === savedOpenAlmaAddress()) useFirstConnection.setState({error: null})
         } catch (error) {
-          if (!disposed && error instanceof OpenAlmaReportError) useFirstConnection.setState({error: error.message})
+          if (!disposed && baseUrl === savedOpenAlmaAddress() && error instanceof OpenAlmaReportError) useFirstConnection.setState({error: error.message})
           return
         }
 
