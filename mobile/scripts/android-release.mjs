@@ -7,6 +7,8 @@ import {setBuildEnv} from './set-build-env.mjs';
 import {syncAutolinkingCache} from './clear-autolinking-cache.mjs';
 import {VARIANT_RE, resolveAndroidPackageName} from './android-package-name.cjs';
 import {CLOUDS} from '../../.github/scripts/prepare-mobile-release-env.mjs';
+import {parsePinnedEnv} from './local-build-number.mjs';
+import {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT} from '../../.github/scripts/release-family.mjs';
 
 // build only for real devices new arch:
 process.env.ORG_GRADLE_PROJECT_reactNativeArchitectures = 'arm64-v8a'
@@ -39,20 +41,29 @@ for (let number = 1; ; number++) {
 await setBuildEnv({syncAutolinking: false});
 const isOpenAlmaBuild = resolveAndroidPackageName().endsWith('.openalma')
 const forkPackage = 'com.mentra.mentra.openalma'
-if (isOpenAlmaBuild && !process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
+let releaseBuildNumber = null
+if (isOpenAlmaBuild) {
   const {version} = JSON.parse(await readFile('../package.json', 'utf-8'))
-  const releaseEnv = {
-    EXPO_PUBLIC_MENTRAOS_VERSION: version,
-    EXPO_PUBLIC_BUILD_ENV: 'prod',
-    EXPO_PUBLIC_CLOUD_CORE_URL: CLOUDS.prod.core,
-    EXPO_PUBLIC_CLOUD_RUNTIME_URL: CLOUDS.prod.runtime,
+  releaseBuildNumber = parsePinnedEnv(process.env.MENTRAOS_PINNED_BUILD_NUMBER)
+  const prefix = familyBuildNumberPrefix(version)
+  if (releaseBuildNumber === null || releaseBuildNumber <= prefix || releaseBuildNumber > prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT) {
+    throw new Error(`OpenAlma publication requires an explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER in ${prefix + 1}..${prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}; use a number above the last published fork build`)
   }
-  let env = await readFile('.env', 'utf-8')
-  for (const [key, value] of Object.entries(releaseEnv)) {
-    process.env[key] = value
-    env = env.replace(new RegExp(`^${key}=.*\\r?\\n?`, 'gm'), '') + `\n${key}=${value}\n`
+  process.env.MENTRAOS_PINNED_BUILD_NUMBER = String(releaseBuildNumber)
+  if (!process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
+    const releaseEnv = {
+      EXPO_PUBLIC_MENTRAOS_VERSION: version,
+      EXPO_PUBLIC_BUILD_ENV: 'prod',
+      EXPO_PUBLIC_CLOUD_CORE_URL: CLOUDS.prod.core,
+      EXPO_PUBLIC_CLOUD_RUNTIME_URL: CLOUDS.prod.runtime,
+    }
+    let env = await readFile('.env', 'utf-8')
+    for (const [key, value] of Object.entries(releaseEnv)) {
+      process.env[key] = value
+      env = env.replace(new RegExp(`^${key}=.*\\r?\\n?`, 'gm'), '') + `\n${key}=${value}\n`
+    }
+    await writeFile('.env', env)
   }
-  await writeFile('.env', env)
 }
 
 console.log('Building Android release...');
@@ -77,7 +88,7 @@ await syncAutolinkingCache();
 // Patch the build-time copy of google-services.json to include a client entry
 // for the suffixed package, since Firebase only knows about the base package.
 // The cloned entry reuses the base Firebase app ID — fine for local/dev builds.
-if (nameSuffix) {
+if (nameSuffix || isOpenAlmaBuild) {
   const gsPath = 'android/app/google-services.json'
   const gs = JSON.parse(await readFile(gsPath, 'utf-8'))
   const newPkg = resolveAndroidPackageName()
@@ -109,6 +120,9 @@ if (isOpenAlmaBuild) {
   const apk = metadata.elements?.find((entry) => entry.outputFile === 'app-release.apk')
   if (metadata.applicationId !== forkPackage || !apk || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(apk.versionName) || !Number.isSafeInteger(apk.versionCode) || apk.versionCode < 1) {
     throw new Error('Invalid OpenAlma release APK identity or version metadata')
+  }
+  if (releaseBuildNumber !== null && apk.versionCode !== releaseBuildNumber) {
+    throw new Error('OpenAlma release APK build number does not match MENTRAOS_PINNED_BUILD_NUMBER')
   }
   const publicationPath = `android/app/build/outputs/apk/release/OpenAlma-Mentra-${apk.versionName}-${apk.versionCode}.apk`
   await copyFile(apkPath, publicationPath)

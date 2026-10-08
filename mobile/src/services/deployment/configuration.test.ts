@@ -86,6 +86,22 @@ it("uses shared dev defaults for missing or blank environment values", () => {
   })
 })
 
+it.each(["com.mentra.mentra", "com.mentra.mentra.openalma"])(
+  "telemetry-enabled workspace cannot override the host policy for %s",
+  async (applicationId) => {
+    mockApplicationId = applicationId
+    let persisted: ActiveDeployment | null = null
+    const persistence: DeploymentStorage = {
+      load: () => persisted, save: (value) => {persisted = value}, remove: () => {persisted = null},
+    }
+    const store = new DeploymentStore(persistence)
+    await store.activate({...workspace, manifest: {...workspace.manifest, telemetry: true}})
+    expect(store.getActive().manifest.telemetry).toBe(true)
+    expect(store.isTelemetryAllowed()).toBe(applicationId === "com.mentra.mentra")
+    expect(new DeploymentStore(persistence).isTelemetryAllowed()).toBe(applicationId === "com.mentra.mentra")
+  },
+)
+
 it.each(["consumer", "workspace"])("uses one resolver for %s debug overrides, startup and reconnect", async (kind) => {
   if (kind === "workspace") await deploymentStore.activate(workspace)
   const deployment = deploymentStore.getActive()

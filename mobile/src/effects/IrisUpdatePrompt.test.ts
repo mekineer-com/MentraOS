@@ -551,6 +551,27 @@ test("retained address editors resnapshot on overlay changes and unchanged blur 
   view.unmount()
 })
 
+test("foreground change before native end-edit preserves and saves a dirty address", async () => {
+  let savedAddress = "http://alpha.example"
+  ;(storage.load as jest.Mock).mockImplementation(() => ({is_ok: () => true, value: savedAddress}))
+  ;(storage.save as jest.Mock).mockImplementation((_key, value) => {
+    savedAddress = value
+    return {is_error: () => false}
+  })
+  global.fetch = jest.fn(async () => ({ok: true, json: async () => ({user_id: "Test User"})})) as unknown as typeof fetch
+  const editor = () => createElement(OpenAlmaAddressEditor, {probeOnMount: false})
+  const view = render(editor())
+  await act(async () => view.UNSAFE_getByType(TextField).props.onChangeText("http://bravo.example"))
+  mockForegroundPackage = "com.mentra.settings"
+  view.rerender(editor())
+  expect(view.UNSAFE_getByType(TextField).props.value).toBe("http://bravo.example")
+  await act(async () => view.UNSAFE_getByType(TextField).props.onEndEditing())
+  expect(savedAddress).toBe("http://bravo.example")
+  expect(storage.save).toHaveBeenCalledTimes(1)
+  expect(global.fetch).toHaveBeenCalledWith("http://bravo.example/integration/mentra/owner", expect.anything())
+  view.unmount()
+})
+
 test("an old address failure cannot restore guidance after a new address succeeds", async () => {
   let savedAddress = "http://alpha.example"
   let rejectOld!: (error: Error) => void

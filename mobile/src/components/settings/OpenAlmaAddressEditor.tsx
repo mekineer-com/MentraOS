@@ -14,6 +14,7 @@ export function OpenAlmaAddressEditor({probeOnMount = true, error}: {probeOnMoun
   const foregroundApp = useForegroundApp()
   const edited = useRef(false)
   useEffect(() => {
+    if (edited.current) return
     setOpenAlmaAddress(savedOpenAlmaAddress())
     setAddressError(null)
     edited.current = false

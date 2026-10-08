@@ -9,12 +9,14 @@ import ts from "typescript"
 import {VARIANT_RE, resolveAndroidPackageName} from "./android-package-name.cjs"
 import {withDebugAbiFilters} from "./android-abi-filters.mjs"
 import {CLOUDS} from "../../.github/scripts/prepare-mobile-release-env.mjs"
+import {parsePinnedEnv} from "./local-build-number.mjs"
+import {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT, nonReleaseBuildNumber} from "../../.github/scripts/release-family.mjs"
 
 const require = createRequire(import.meta.url)
 const fork = "com.mentra.mentra.openalma"
 const compile = (file) => ts.transpileModule(readFileSync(new URL(file, import.meta.url), "utf8"), {
-  compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022},
-}).outputText.replace(/^#!.*\n/, "")
+  compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true},
+}).outputText.replace(/^#!.*\n/, "").replaceAll("import.meta.url", JSON.stringify(new URL(file, import.meta.url).href))
 
 function generateGradle(packageName, contents) {
   const exports = {}
@@ -79,24 +81,41 @@ ${guard(pkg)}
   execFileSync("java", ["-Xmx128m", "-cp", groovyJar, "groovy.ui.GroovyMain", "-e", script], {timeout: 30000})
 })
 
-async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError} = {}) {
-  const environment = {ANDROID_SERIAL: "test-phone", ...env}
+async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError, committerTime = Date.parse("2026-10-09T12:39Z") / 1000} = {}) {
+  const environment = {ANDROID_SERIAL: "test-phone", MENTRAOS_PINNED_BUILD_NUMBER: "302010123", ...env}
   const commands = [], copies = [], writes = [], backups = [], events = []
-  const output = {
-    applicationId: fork,
-    elements: [{outputFile: "app-release.apk", versionName: "3.2.1", versionCode: 302010123}],
-    ...metadata,
-  }
+  const buildNumberHelper = {}
+  runInNewContext(compile("./build-number.mjs"), {
+    exports: buildNumberHelper, process: {env: environment},
+    require: (name) => {
+      if (name === "node:child_process") return {execFileSync: () => String(committerTime)}
+      if (name === "node:fs") return {readFileSync: () => '{"version":"3.2.1"}'}
+      if (name === "../../.github/scripts/release-family.mjs") return {nonReleaseBuildNumber}
+      return require(name)
+    },
+  })
+  let nativeBuildNumber
   const files = {
     "../package.json": '{"version":"3.2.1"}',
     ".env": "EXPO_PUBLIC_MENTRAOS_VERSION=3.1.0\nEXPO_PUBLIC_BUILD_ENV=dev\nEXPO_PUBLIC_CLOUD_CORE_URL=https://core.dev.example.invalid\nEXPO_PUBLIC_CLOUD_RUNTIME_URL=https://runtime.dev.example.invalid\nOTHER=test\n",
     "android/app/build.gradle": `android { defaultConfig { applicationId "${generatedPackage}" } }`,
-    "android/app/google-services.json": '{"client":[]}',
-    "android/app/build/outputs/apk/release/output-metadata.json": JSON.stringify(output),
+    "android/app/google-services.json": JSON.stringify({client: [{
+      client_info: {mobilesdk_app_id: "test-firebase-app", android_client_info: {package_name: "com.mentra.mentra"}},
+    }]}),
     ...fileOverrides,
   }
   const command = async (strings, ...values) => {
-    commands.push(String.raw({raw: strings}, ...values))
+    const command = String.raw({raw: strings}, ...values)
+    commands.push(command)
+    if (command.includes("expo prebuild")) nativeBuildNumber = buildNumberHelper.getBuildNumber()
+    if (command.includes("assembleRelease")) {
+      assert.equal(buildNumberHelper.getBuildNumber(), nativeBuildNumber)
+      files["android/app/build/outputs/apk/release/output-metadata.json"] = JSON.stringify({
+        applicationId: generatedPackage,
+        elements: [{outputFile: "app-release.apk", versionName: "3.2.1", versionCode: nativeBuildNumber}],
+        ...metadata,
+      })
+    }
     return {stdout: ""}
   }
   const dollar = (...args) => Array.isArray(args[0]) ? command(...args) : command
@@ -136,11 +155,13 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
         }),
       }
       if (name === "../../.github/scripts/prepare-mobile-release-env.mjs") return {CLOUDS}
+      if (name === "./local-build-number.mjs") return {parsePinnedEnv}
+      if (name === "../../.github/scripts/release-family.mjs") return {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}
       throw new Error(`unexpected module: ${name}`)
     },
   })
   await promise
-  return {environment, commands, copies, writes, files, backups, events}
+  return {environment, commands, copies, writes, files, backups, events, nativeBuildNumber}
 }
 
 test("backs up original env before mutation, numbers collisions and refuses backup failures", async () => {
@@ -170,6 +191,10 @@ test("fork CLI and dotenv builds synchronize JS version and copy actual Gradle A
     assert.match(result.files[".env"], /EXPO_PUBLIC_BUILD_ENV=prod\n/)
     assert.ok(!result.files[".env"].includes("https://core.dev.example.invalid"))
     assert.match(result.files[".env"], /OTHER=test/)
+    assert.equal(result.nativeBuildNumber, 302010123)
+    const clients = JSON.parse(result.files["android/app/google-services.json"]).client
+    assert.deepEqual(clients.map((client) => client.client_info.android_client_info.package_name), ["com.mentra.mentra", fork])
+    assert.equal(clients[1].client_info.mobilesdk_app_id, clients[0].client_info.mobilesdk_app_id)
     assert.deepEqual(result.copies, [[
       "android/app/build/outputs/apk/release/app-release.apk",
       "android/app/build/outputs/apk/release/OpenAlma-Mentra-3.2.1-302010123.apk",
@@ -186,12 +211,50 @@ test("coordinated beta/dev full JS identities and Stock/local variants are uncha
     assert.equal(result.environment.EXPO_PUBLIC_MENTRAOS_VERSION, env.EXPO_PUBLIC_MENTRAOS_VERSION)
     assert.equal(result.environment.EXPO_PUBLIC_BUILD_ENV, env.EXPO_PUBLIC_BUILD_ENV)
     assert.equal(result.environment.EXPO_PUBLIC_CLOUD_CORE_URL, env.EXPO_PUBLIC_CLOUD_CORE_URL)
-    assert.equal(result.writes.length, 0)
+    assert.ok(!result.writes.includes(".env"))
   }
   for (const name of [undefined, "stable"]) {
-    const result = await runRelease({name, env: {EXPO_PUBLIC_MENTRAOS_VERSION: "3.2.0"}})
+    const result = await runRelease({name, env: {EXPO_PUBLIC_MENTRAOS_VERSION: "3.2.0", MENTRAOS_PINNED_BUILD_NUMBER: undefined}})
     assert.equal(result.environment.EXPO_PUBLIC_MENTRAOS_VERSION, "3.2.0")
     assert.equal(result.copies.length, 0)
+    const packages = JSON.parse(result.files["android/app/google-services.json"]).client.map((client) => client.client_info.android_client_info.package_name)
+    assert.deepEqual(packages, name ? ["com.mentra.mentra", `com.mentra.mentra.${name}`] : ["com.mentra.mentra"])
+  }
+})
+
+test("fork publication requires a release-family pin and exports that helper-derived number", async () => {
+  for (const selection of [{name: "openalma"}, {loadedEnv: {MENTRAOS_BUILD_NAME: "openalma"}}]) {
+    for (const pin of [undefined, "", "0", "-1", "302010123junk", "1.5", "9007199254740992", "302000123", "302010000", "302013000", "302019999"]) {
+      await assert.rejects(runRelease({...selection, env: {MENTRAOS_PINNED_BUILD_NUMBER: pin}}), /explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER/)
+    }
+    for (const pin of ["302010001", " 302012999 "]) {
+      const result = await runRelease({...selection, env: {MENTRAOS_PINNED_BUILD_NUMBER: pin}})
+      assert.equal(result.nativeBuildNumber, Number(pin))
+      assert.equal(result.environment.MENTRAOS_PINNED_BUILD_NUMBER, String(Number(pin)))
+      assert.ok(result.copies[0][1].endsWith(`-${Number(pin)}.apk`))
+    }
+  }
+  const dotenvPin = await runRelease({loadedEnv: {MENTRAOS_BUILD_NAME: "openalma", MENTRAOS_PINNED_BUILD_NUMBER: "302010124"}})
+  assert.equal(dotenvPin.nativeBuildNumber, 302010124)
+  for (const markers of [{MENTRA_COORDINATED_RELEASE_CHANNEL: "beta"}, {MENTRAOS_NATIVE_MARKETING_VERSION: "3.2.1"}]) {
+    await assert.rejects(runRelease({name: "openalma", env: {...markers, MENTRAOS_PINNED_BUILD_NUMBER: undefined}}), /explicitly allocated/)
+  }
+  await assert.rejects(runRelease({name: "openalma", metadata: {
+    elements: [{outputFile: "app-release.apk", versionName: "3.2.1", versionCode: 302010124}],
+  }}), /does not match MENTRAOS_PINNED_BUILD_NUMBER/)
+})
+
+test("development fallback still wraps but fork publication cannot use it", async () => {
+  for (const [clock, number] of [["2026-10-09T12:39Z", 302019999], ["2026-10-09T12:40Z", 302013000]]) {
+    const committerTime = Date.parse(clock) / 1000
+    const development = await runRelease({generatedPackage: "com.mentra.mentra", committerTime, env: {
+      MENTRAOS_PINNED_BUILD_NUMBER: undefined,
+      MENTRAOS_NATIVE_MARKETING_VERSION: "3.2.1", EXPO_PUBLIC_MENTRAOS_VERSION: "3.2.1-dev.42",
+    }})
+    assert.equal(development.nativeBuildNumber, number)
+    await assert.rejects(runRelease({name: "openalma", committerTime, env: {MENTRAOS_PINNED_BUILD_NUMBER: undefined}}), /explicitly allocated/)
+    const release = await runRelease({name: "openalma", committerTime})
+    assert.equal(release.nativeBuildNumber, 302010123)
   }
 })
 

@@ -1,4 +1,5 @@
 import {storage} from "@/utils/storage/storage"
+import {isOpenAlmaHost} from "@/services/openAlmaHostUpdate"
 
 import type {ActiveDeployment, DeploymentCandidate, WorkspaceDeployment} from "./types"
 import {withClearedDeploymentDebugOverrides} from "./debugOverrides"
@@ -64,7 +65,7 @@ export class DeploymentStore {
 
   /** Whether Mentra-owned telemetry may initialize for the current selection. */
   isTelemetryAllowed(): boolean {
-    if (!this.resolved) return false
+    if (!this.resolved || isOpenAlmaHost()) return false
     return this.active.manifest.telemetry
   }
 
