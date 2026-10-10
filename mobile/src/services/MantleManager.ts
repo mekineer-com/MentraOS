@@ -1,4 +1,4 @@
-import {Platform} from "react-native"
+import {AppState, Platform} from "react-native"
 import BluetoothSdk from "@mentra/bluetooth-sdk-internal"
 import CrustModule from "@mentra/crust"
 import {Asset} from "expo-asset"
@@ -925,6 +925,11 @@ class MantleManager {
   }
 
   private async setupSubscriptions() {
+    this.subs.push(
+      AppState.addEventListener("change", (state) => {
+        if (state === "active") void this.sendCalendarEvents()
+      }),
+    )
     // (Device-settings -> glasses BLE sync AND phone-notification config -> the
     // native listener now live in island's GlassesSettingsSync / PhoneNotificationsSync,
     // started by engine.start(), so engine.glasses.settings.set() /
@@ -1258,6 +1263,7 @@ class MantleManager {
   }
 
   private async sendCalendarEvents() {
+    const generation = this.miniappGeneration
     try {
       // Ungranted CALENDAR permission is the default state — skip quietly
       // instead of letting getCalendarsAsync throw into the catch as an error.
@@ -1307,6 +1313,7 @@ class MantleManager {
         }
       })
       try {
+        if (generation !== this.miniappGeneration) return
         await BluetoothSdk.setCalendarEvents(shapedEvents)
       } catch (error) {
         console.warn("MANTLE: Failed to sync calendar events to glasses", error)

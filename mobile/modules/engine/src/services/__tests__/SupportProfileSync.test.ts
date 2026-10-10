@@ -93,6 +93,28 @@ afterEach(() => {
 })
 
 describe("SupportProfileSync", () => {
+  test("refreshes on foreground and removes its lifecycle listener on stop", async () => {
+    let foreground!: (state: string) => void
+    const remove = mock(() => {})
+    const appState = reactNative.AppState as {
+      addEventListener: (event: string, callback: (state: string) => void) => {remove: () => void}
+    }
+    spyOn(appState, "addEventListener").mockImplementation((_event, callback) => {
+      foreground = callback
+      return {remove}
+    })
+    startSupportProfileSync()
+    await flushPromises()
+    foreground("active")
+    await flushPromises()
+    expect(updateMock).toHaveBeenCalledTimes(2)
+    stopSupportProfileSync()
+    expect(remove).toHaveBeenCalledTimes(1)
+    foreground("active")
+    await flushPromises()
+    expect(updateMock).toHaveBeenCalledTimes(2)
+  })
+
   test("projects only the support allowlist and excludes network/device addresses", () => {
     const snapshot = buildSnapshot(new Date("2026-08-11T12:00:00.000Z"))
     const serialized = JSON.stringify(snapshot)

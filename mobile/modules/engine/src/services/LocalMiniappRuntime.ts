@@ -6326,15 +6326,20 @@ class LocalMiniappRuntime {
     }
 
     // Headless wake + wait for CONNECT (idempotent / fast if already connected).
+    const caller = this.connectedApps.get(callerPackageName)
+    if (!caller) return
     try {
       await this.wakeInteropApp(target)
     } catch (e) {
+      if (this.connectedApps.get(callerPackageName) !== caller) return
       this.sendResult(callerPackageName, requestId, false, undefined, {
         code: MiniappErrorCode.WAKE_FAILED,
         message: (e as Error)?.message ?? `failed to wake ${target}`,
       })
       return
     }
+
+    if (this.connectedApps.get(callerPackageName) !== caller) return
 
     // The wake waited for CONNECT, but the target could have dropped in the gap
     // before delivery — fail fast rather than arming a timer for a call that

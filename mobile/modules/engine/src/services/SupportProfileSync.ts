@@ -1,6 +1,6 @@
 import Constants from "expo-constants"
 import * as Device from "expo-device"
-import {Platform} from "react-native"
+import {AppState, Platform} from "react-native"
 import type {SupportStateInput} from "@mentra/cloud-client"
 
 import {useGlassesStore} from "../stores/glasses"
@@ -13,6 +13,7 @@ const RETRY_MS = 30_000
 const HEARTBEAT_MS = 6 * 60 * 60_000
 
 let unsubscribe: (() => void) | null = null
+let appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -34,6 +35,9 @@ export function startSupportProfileSync(): void {
   const generation = ++syncGeneration
   lastConnectionState = useGlassesStore.getState().connection.state
   unsubscribe = useGlassesStore.subscribe(() => handleGlassesStoreChange(generation))
+  appStateSubscription = AppState.addEventListener("change", (state) => {
+    if (state === "active") void sendCurrentSnapshot(true, generation)
+  })
   heartbeatTimer = setInterval(() => void sendCurrentSnapshot(true, generation), HEARTBEAT_MS)
   void sendCurrentSnapshot(true, generation)
 }
@@ -42,6 +46,8 @@ export function stopSupportProfileSync(): void {
   syncGeneration += 1
   unsubscribe?.()
   unsubscribe = null
+  appStateSubscription?.remove()
+  appStateSubscription = null
   if (debounceTimer !== null) clearTimeout(debounceTimer)
   if (retryTimer !== null) clearTimeout(retryTimer)
   if (heartbeatTimer !== null) clearInterval(heartbeatTimer)

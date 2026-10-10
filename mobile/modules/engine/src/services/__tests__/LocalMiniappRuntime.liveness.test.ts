@@ -13,6 +13,7 @@ const methods = [
   "hasLiveSoftapAttempt",
   "clearForegroundProbe",
   "handleMeetingGetState",
+  "handleActionInvoke",
   "initialize",
   "cleanup",
 ]
@@ -145,6 +146,29 @@ test("cleanup cancels pending actions before notifying callers and unregistering
   expect(replies).toBe(1)
   expect(f.unregistered).toEqual([CALL])
   expect(f.host.connectedApps.size).toBe(0)
+})
+
+test("a target wake completing after caller teardown does not deliver an old action", async () => {
+  const f = fixture()
+  let completeWake!: () => void
+  f.host.requireSystemCaller = () => true
+  f.host.actionPayloadTooLarge = () => false
+  f.host.interopApps = () => [{packageName: "target", actions: [{id: "open"}]}]
+  f.host.wakeInteropApp = () =>
+    new Promise<void>((resolve) => {
+      completeWake = resolve
+    })
+  f.host.sendToMiniapp = () => {
+    throw new Error("Obsolete action delivered")
+  }
+  const invoke = f.host.handleActionInvoke(CALL, {targetPackageName: "target", actionId: "open"}, "req-1")
+  f.host.cleanup()
+  f.host.connectedApps.set(CALL, {lastPongAt: 0})
+  f.host.connectedApps.set("target", {lastPongAt: 0})
+  completeWake()
+  await invoke
+  expect(f.timers.size).toBe(0)
+  expect(f.host.actionCalls.size).toBe(0)
 })
 
 describe("foreground liveness probe", () => {
