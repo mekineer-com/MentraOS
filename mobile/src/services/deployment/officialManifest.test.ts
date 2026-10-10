@@ -15,6 +15,7 @@ test.each(["com.mentra.mentra", "com.mentra.mentra.cn", "com.mentra.mentra.dev",
   (applicationId) => {
     mockApplicationId = applicationId
     const {appUpdates, telemetry} = createOfficialManifest()
+    expect(createOfficialManifest().features.runtimeRealtimeSession).toBe(true)
     expect(telemetry).toBe(true)
     expect(appUpdates.storeUrls).toEqual({android: PLAY_STORE_URL, ios: APP_STORE_URL})
     expect(appUpdates.reviewUrls).toEqual({android: PLAY_STORE_URL, ios: APP_STORE_REVIEW_URL})
@@ -25,6 +26,7 @@ test.each(["com.mentra.mentra", "com.mentra.mentra.cn", "com.mentra.mentra.dev",
 test("fork boot Update leads to fork releases, not stock Play Store", () => {
   mockApplicationId = "com.mentra.mentra.openalma"
   const {appUpdates, telemetry} = createOfficialManifest()
+  expect(createOfficialManifest().features.runtimeRealtimeSession).toBe(false)
   expect(telemetry).toBe(false)
   expect(appUpdates.storeUrls).toEqual({android: OPENALMA_HOST_RELEASES_URL, ios: APP_STORE_URL})
   expect(appUpdates.reviewUrls).toEqual({android: null, ios: APP_STORE_REVIEW_URL})

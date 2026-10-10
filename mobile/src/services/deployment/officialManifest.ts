@@ -50,7 +50,8 @@ export function createOfficialManifest(): DeploymentManifest {
     miniapps: {managed: [], configuration: {}},
     glasses: {allowedModelsOverride: null},
     features: {
-      runtimeRealtimeSession: true,
+      // Temporary OpenAlma battery-isolation trial; Core/miniapp registration stay enabled.
+      runtimeRealtimeSession: !isOpenAlmaHost(),
       managedStreams: true,
       nativeMeetings: true,
       cloudSpeech: true,
