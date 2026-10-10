@@ -1,11 +1,12 @@
-// BgTimer — background-safe timers for the engine.
+// BgTimer: native timer queue for the engine.
 //
 // Everything timing-critical in the engine runs through this class: the
 // miniapp liveness watchdog, display durationMs expiries, boot windows,
 // auth-token refresh. On Android, React Native PAUSES plain JS timers while
 // the app is backgrounded, so those features only keep working in the
 // background when the native implementation (react-native-nitro-bg-timer)
-// is active.
+// is active and the CPU is awake. Our Android patch removes the timer-owned
+// wake lock: CPU sleep delays callbacks; active work must provide needed wakefulness.
 //
 // Who actually gets native timers:
 //   - Android, dev AND release: always attempted — dev must match production

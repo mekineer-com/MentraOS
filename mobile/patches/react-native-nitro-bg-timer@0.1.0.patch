@@ -1,0 +1,91 @@
+diff --git a/android/src/main/java/com/margelo/nitro/backgroundtimer/NitroBackgroundTimer.kt b/android/src/main/java/com/margelo/nitro/backgroundtimer/NitroBackgroundTimer.kt
+index 2b9b21f28da94b764a4d5c11813bcc914875eb7d..21c3c704961a5ea610b739d03fa96ab416c3acaa 100644
+--- a/android/src/main/java/com/margelo/nitro/backgroundtimer/NitroBackgroundTimer.kt
++++ b/android/src/main/java/com/margelo/nitro/backgroundtimer/NitroBackgroundTimer.kt
+@@ -1,47 +1,22 @@
+ package com.margelo.nitro.backgroundtimer
+ 
+-import android.annotation.SuppressLint
+ import com.facebook.proguard.annotations.DoNotStrip
+ import android.os.Handler
+ import android.os.Looper
+-import android.os.PowerManager
+ import android.util.Log
+-import com.margelo.nitro.NitroModules
+ 
+ @DoNotStrip
+ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+-  private val context = NitroModules.applicationContext
+-    ?: throw IllegalStateException("NitroModules.applicationContext is null")
+-
+   private val handler = Handler(Looper.getMainLooper())
+-  private val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+-  @SuppressLint("InvalidWakeLockTag")
+-  private val wakeLock: PowerManager.WakeLock =
+-    powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NitroBackgroundTimer")
+ 
+   private val timeoutRunnables = HashMap<Int, Runnable>()
+   private val intervalRunnables = HashMap<Int, Runnable>()
+ 
+-  // --- WakeLock helpers ---
+-  @SuppressLint("WakelockTimeout")
+-  private fun acquireWakeLock() {
+-    if (!wakeLock.isHeld) {
+-      wakeLock.acquire()
+-    }
+-  }
+-
+-  private fun releaseWakeLockIfNeeded() {
+-    if (timeoutRunnables.isEmpty() && intervalRunnables.isEmpty() && wakeLock.isHeld) {
+-      wakeLock.release()
+-    }
+-  }
+-
+   // --- Timeout ---
+   override fun setTimeout(id: Double, duration: Double, callback: (Double) -> Unit): Double {
+     val intId = id.toInt()
+     clearTimeout(id)
+ 
+-    acquireWakeLock()
+     val runnable = Runnable {
+       try {
+         callback(id)
+@@ -49,7 +24,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+         Log.e("NitroBackgroundTimer", "Callback error in setTimeout($id): ${e.message}", e)
+       }
+       timeoutRunnables.remove(intId)
+-      releaseWakeLockIfNeeded()
+     }
+ 
+     timeoutRunnables[intId] = runnable
+@@ -61,7 +35,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+     val intId = id.toInt()
+     timeoutRunnables[intId]?.let { handler.removeCallbacks(it) }
+     timeoutRunnables.remove(intId)
+-    releaseWakeLockIfNeeded()
+   }
+ 
+   // --- Interval ---
+@@ -69,7 +42,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+     val intId = id.toInt()
+     clearInterval(id)
+ 
+-    acquireWakeLock()
+     val runnable = object : Runnable {
+       override fun run() {
+         try {
+@@ -90,7 +62,6 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+     val intId = id.toInt()
+     intervalRunnables[intId]?.let { handler.removeCallbacks(it) }
+     intervalRunnables.remove(intId)
+-    releaseWakeLockIfNeeded()
+   }
+ 
+   // --- Cleanup ---
+@@ -99,6 +70,5 @@ class NitroBackgroundTimer : HybridNitroBackgroundTimerSpec() {
+     intervalRunnables.values.forEach { handler.removeCallbacks(it) }
+     timeoutRunnables.clear()
+     intervalRunnables.clear()
+-    if (wakeLock.isHeld) wakeLock.release()
+   }
+ }
