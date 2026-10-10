@@ -818,7 +818,6 @@ class LocalMiniappRuntime {
     this.visiblePackage = this.currentVisiblePackage()
     this.visibilityUnsubscribe = useAppStatusStore.subscribe(() => this.updateVisibility())
     this.appStateSubscription = AppState.addEventListener("change", () => this.updateVisibility())
-    this.ensurePingLoop()
     // Native background tasks can survive a previous JS runtime. Reconcile even
     // when no miniapps register and the previous aggregate was already off.
     this.lastAppliedLocationRate = null
@@ -6573,6 +6572,16 @@ class LocalMiniappRuntime {
     this.visiblePackage = null
     this.initialized = false
     this.stopPingLoop()
+
+    const pendingActions = [...this.actionCalls.values()]
+    this.actionCalls.clear()
+    for (const pending of pendingActions) {
+      BgTimer.clearTimeout(pending.timer)
+      this.sendResult(pending.callerPackageName, pending.callerRequestId, false, undefined, {
+        code: MiniappErrorCode.NOT_CONNECTED,
+        message: "Miniapp runtime stopped before the action completed",
+      })
+    }
 
     // Copy keys since unregisterApp mutates the map
     const packageNames = [...this.connectedApps.keys()]

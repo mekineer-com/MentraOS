@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import {afterEach, beforeEach, describe, expect, mock, test} from "bun:test"
+import {afterEach, beforeEach, describe, expect, mock, spyOn, test} from "bun:test"
 
 let subscriptionCallback: (() => void) | null = null
 let nextTimerId = 1
@@ -46,22 +46,6 @@ mock.module("../../stores/glasses", () => ({
     }),
   },
 }))
-mock.module("../../utils/timers", () => ({
-  BgTimer: {
-    setInterval: mock((callback: () => void) => {
-      const id = nextTimerId++
-      intervalCallbacks.set(id, callback)
-      return id
-    }),
-    clearInterval: mock((id: number) => intervalCallbacks.delete(id)),
-    setTimeout: mock((callback: () => void) => {
-      const id = nextTimerId++
-      timeoutCallbacks.set(id, callback)
-      return id
-    }),
-    clearTimeout: mock((id: number) => timeoutCallbacks.delete(id)),
-  },
-}))
 import {cloudClientService} from "./cloudClientServiceTestMock"
 
 cloudClientService.core = {supportProfile: {update: updateMock}}
@@ -78,6 +62,22 @@ const {
 
 beforeEach(() => {
   stopSupportProfileSync()
+  spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+    const id = nextTimerId++
+    intervalCallbacks.set(id, callback)
+    return id
+  }) as typeof setInterval)
+  spyOn(globalThis, "clearInterval").mockImplementation((id) => {
+    intervalCallbacks.delete(Number(id))
+  })
+  spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+    const id = nextTimerId++
+    timeoutCallbacks.set(id, callback)
+    return id
+  }) as typeof setTimeout)
+  spyOn(globalThis, "clearTimeout").mockImplementation((id) => {
+    timeoutCallbacks.delete(Number(id))
+  })
   updateMock.mockClear()
   updateMock.mockImplementation(async () => ({status: "accepted"}))
   glassesState.firmwareVersion = "1.2.3"
@@ -87,7 +87,10 @@ beforeEach(() => {
   subscriptionCallback = null
 })
 
-afterEach(() => stopSupportProfileSync())
+afterEach(() => {
+  stopSupportProfileSync()
+  mock.restore()
+})
 
 describe("SupportProfileSync", () => {
   test("projects only the support allowlist and excludes network/device addresses", () => {

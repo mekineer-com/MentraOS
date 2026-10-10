@@ -4,7 +4,6 @@ import {Platform} from "react-native"
 import type {SupportStateInput} from "@mentra/cloud-client"
 
 import {useGlassesStore} from "../stores/glasses"
-import {BgTimer} from "../utils/timers"
 import {cloudClientService} from "./CloudClientService"
 
 const ENGINE_VERSION = (require("../../package.json") as {version?: string}).version
@@ -14,9 +13,9 @@ const RETRY_MS = 30_000
 const HEARTBEAT_MS = 6 * 60 * 60_000
 
 let unsubscribe: (() => void) | null = null
-let debounceTimer: number | null = null
-let retryTimer: number | null = null
-let heartbeatTimer: number | null = null
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let lastSentFingerprint: string | null = null
 let queuedFingerprint: string | null = null
 let sendingGeneration: number | null = null
@@ -35,7 +34,7 @@ export function startSupportProfileSync(): void {
   const generation = ++syncGeneration
   lastConnectionState = useGlassesStore.getState().connection.state
   unsubscribe = useGlassesStore.subscribe(() => handleGlassesStoreChange(generation))
-  heartbeatTimer = BgTimer.setInterval(() => void sendCurrentSnapshot(true, generation), HEARTBEAT_MS)
+  heartbeatTimer = setInterval(() => void sendCurrentSnapshot(true, generation), HEARTBEAT_MS)
   void sendCurrentSnapshot(true, generation)
 }
 
@@ -43,9 +42,9 @@ export function stopSupportProfileSync(): void {
   syncGeneration += 1
   unsubscribe?.()
   unsubscribe = null
-  if (debounceTimer !== null) BgTimer.clearTimeout(debounceTimer)
-  if (retryTimer !== null) BgTimer.clearTimeout(retryTimer)
-  if (heartbeatTimer !== null) BgTimer.clearInterval(heartbeatTimer)
+  if (debounceTimer !== null) clearTimeout(debounceTimer)
+  if (retryTimer !== null) clearTimeout(retryTimer)
+  if (heartbeatTimer !== null) clearInterval(heartbeatTimer)
   debounceTimer = null
   retryTimer = null
   heartbeatTimer = null
@@ -74,8 +73,8 @@ function scheduleMeaningfulUpdate(generation = syncGeneration): void {
 }
 
 function armDebounce(generation: number): void {
-  if (debounceTimer !== null) BgTimer.clearTimeout(debounceTimer)
-  debounceTimer = BgTimer.setTimeout(() => {
+  if (debounceTimer !== null) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
     debounceTimer = null
     void sendCurrentSnapshot(false, generation)
   }, DEBOUNCE_MS)
@@ -102,7 +101,7 @@ async function sendCurrentSnapshot(force: boolean, generation = syncGeneration):
     if (retryDelayMs === null) {
       lastSentFingerprint = fingerprint
       if (queuedFingerprint === fingerprint) queuedFingerprint = null
-      if (retryTimer !== null) BgTimer.clearTimeout(retryTimer)
+      if (retryTimer !== null) clearTimeout(retryTimer)
       retryTimer = null
     }
   } catch (error) {
@@ -118,8 +117,8 @@ async function sendCurrentSnapshot(force: boolean, generation = syncGeneration):
     if (generationIsActive) {
       sendingGeneration = null
       if (retryDelayMs !== null) {
-        if (retryTimer !== null) BgTimer.clearTimeout(retryTimer)
-        retryTimer = BgTimer.setTimeout(() => {
+        if (retryTimer !== null) clearTimeout(retryTimer)
+        retryTimer = setTimeout(() => {
           retryTimer = null
           void sendCurrentSnapshot(true, generation)
         }, retryDelayMs)

@@ -192,10 +192,10 @@ export function OtaUpdateChecker() {
       setManifestGeneration((generation) => generation + 1)
     }
 
-    const intervalId = BgTimer.setInterval(() => void pollManifest(), MANIFEST_POLL_INTERVAL_MS)
+    const intervalId = setInterval(() => void pollManifest(), MANIFEST_POLL_INTERVAL_MS)
     return () => {
       cancelled = true
-      BgTimer.clearInterval(intervalId)
+      clearInterval(intervalId)
     }
   }, [glassesConnected, buildNumber, otaSnapshot.inProgress, defaultWearable])
 

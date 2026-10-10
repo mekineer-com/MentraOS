@@ -8,7 +8,14 @@ import {shouldHoldMiniappPingLiveness} from "../MiniappLiveness"
 // Same approach as LocalMiniappRuntime.softap.test.ts: run the shipped methods against faked I/O
 // instead of loading the Expo app singleton and every hardware service behind it.
 const source = readFileSync(new URL("../LocalMiniappRuntime.ts", import.meta.url), "utf8")
-const methods = ["probeForegroundLiveness", "hasLiveSoftapAttempt", "clearForegroundProbe", "handleMeetingGetState"]
+const methods = [
+  "probeForegroundLiveness",
+  "hasLiveSoftapAttempt",
+  "clearForegroundProbe",
+  "handleMeetingGetState",
+  "initialize",
+  "cleanup",
+]
   .map((name) => {
     const start = source.search(new RegExp(`^  (?:public|private) (?:async )?${name}\\(`, "m"))
     if (start < 0) throw new Error(`Missing runtime method ${name}`)
@@ -54,16 +61,20 @@ function fixture(opts: {owner?: string | null; attempt?: Attempt | null; nativeS
     "FOREGROUND_LIVENESS_PROBE_TIMEOUT_MS",
     "LOG_TAG",
     "console",
-    `${compiled}; return Host`,
+    "useAppStatusStore",
+    "AppState",
+    `${compiled}; const LocalMiniappRuntime = Host; return Host`,
   )(
     bgTimer,
     acsMeetingService,
     shouldHoldMiniappPingLiveness,
     {PING: "ping"},
-    {INTERNAL: "INTERNAL"},
+    {INTERNAL: "INTERNAL", NOT_CONNECTED: "NOT_CONNECTED"},
     2_500,
     "LOCAL_MINIAPP",
     {log() {}, warn() {}},
+    {subscribe: () => () => {}},
+    {addEventListener: () => ({remove() {}})},
   )
   const host = new Host()
   const unregistered: string[] = []
@@ -71,6 +82,12 @@ function fixture(opts: {owner?: string | null; attempt?: Attempt | null; nativeS
   const results: Array<{packageName: string; ok: boolean; data: unknown}> = []
   host.connectedApps = new Map([[CALL, {lastPongAt: 0}]])
   host.foregroundProbeTimers = new Map()
+  host.actionCalls = new Map()
+  host.streamSubscribers = new Map()
+  host.stopPingLoop = () => {}
+  host.getButtonPressSubscribers = () => []
+  host.recomputeLocationTier = () => {}
+  host.currentVisiblePackage = () => null
   host.softapAttempt = opts.attempt ?? null
   host.sendToMiniapp = () => {}
   host.unregisterApp = (packageName: string) => unregistered.push(packageName)
@@ -83,6 +100,8 @@ function fixture(opts: {owner?: string | null; attempt?: Attempt | null; nativeS
     respawned,
     results,
     nativeReads: () => nativeReads,
+    timers,
+    bgTimer,
     /** Let the probe's timeout fire without a pong having arrived. */
     expireProbe() {
       for (const callback of [...timers.values()]) callback()
@@ -90,6 +109,43 @@ function fixture(opts: {owner?: string | null; attempt?: Attempt | null; nativeS
     },
   }
 }
+
+test("initializing an empty runtime does not start native ping timers", () => {
+  const f = fixture()
+  f.host.connectedApps.clear()
+  f.host.ensurePingLoop = () => {
+    throw new Error("Empty runtime started the ping loop")
+  }
+  f.host.initialize()
+  f.host.initialize()
+  expect(f.host.initialized).toBe(true)
+  f.host.cleanup()
+})
+
+test("cleanup cancels pending actions before notifying callers and unregistering apps", () => {
+  const f = fixture()
+  let replies = 0
+  const timer = f.bgTimer.setTimeout(() => {
+    throw new Error("Action timeout survived cleanup")
+  })
+  f.host.actionCalls.set("action-1", {
+    callerPackageName: CALL,
+    callerRequestId: "req-1",
+    timer,
+  })
+  f.host.sendResult = (packageName: string, requestId: string, ok: boolean, _data: unknown, error: unknown) => {
+    replies++
+    expect([packageName, requestId, ok]).toEqual([CALL, "req-1", false])
+    expect(error).toMatchObject({code: "NOT_CONNECTED"})
+    expect(f.host.actionCalls.size).toBe(0)
+    expect(f.timers.size).toBe(0)
+    expect(f.unregistered).toEqual([])
+  }
+  f.host.cleanup()
+  expect(replies).toBe(1)
+  expect(f.unregistered).toEqual([CALL])
+  expect(f.host.connectedApps.size).toBe(0)
+})
 
 describe("foreground liveness probe", () => {
   test("respawns a miniapp that misses the probe with no call in progress", () => {

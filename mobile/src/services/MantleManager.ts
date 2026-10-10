@@ -98,7 +98,7 @@ const SPOKEN_NOTIFICATION_GAP_MS = 10_000
 class MantleManager {
   private iosMiniappVisibility = new Map<string, IosMiniappVisibility>()
   private static instance: MantleManager | null = null
-  private calendarSyncTimer: ReturnType<typeof BgTimer.setInterval> | null = null
+  private calendarSyncTimer: ReturnType<typeof setInterval> | null = null
   private micDataTimeout: ReturnType<typeof BgTimer.setTimeout> | null = null
   private MIC_TIMEOUT_MS: number = 1000
   private micDataActive: boolean = false
@@ -632,7 +632,7 @@ class MantleManager {
     this.iosMiniappVisibility.clear()
     // Stop timers
     if (this.calendarSyncTimer) {
-      BgTimer.clearInterval(this.calendarSyncTimer)
+      clearInterval(this.calendarSyncTimer)
       this.calendarSyncTimer = null
     }
     // Remove all event subscriptions
@@ -895,10 +895,10 @@ class MantleManager {
   }
 
   private async setupPeriodicTasks() {
-    if (this.calendarSyncTimer) BgTimer.clearInterval(this.calendarSyncTimer)
+    if (this.calendarSyncTimer) clearInterval(this.calendarSyncTimer)
     this.sendCalendarEvents()
     // Calendar sync every hour
-    this.calendarSyncTimer = BgTimer.setInterval(
+    this.calendarSyncTimer = setInterval(
       () => {
         this.sendCalendarEvents()
       },

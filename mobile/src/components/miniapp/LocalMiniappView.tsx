@@ -214,14 +214,14 @@ function LocalMiniappView({
       }
     })
 
-    const intervalId = BgTimer.setInterval(() => {
+    const intervalId = setInterval(() => {
       if (!connectedRef.current || AppState.currentState !== "active") return
       refreshUiBinding("foreground-resync", false)
     }, UI_RESYNC_INTERVAL_MS)
 
     return () => {
       sub.remove()
-      BgTimer.clearInterval(intervalId)
+      clearInterval(intervalId)
     }
   }, [refreshUiBinding])
 
