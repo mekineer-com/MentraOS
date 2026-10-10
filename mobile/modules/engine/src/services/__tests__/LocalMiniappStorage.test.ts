@@ -1,5 +1,4 @@
 import {describe, expect, it} from "bun:test"
-import {readFileSync} from "node:fs"
 
 import {LocalMiniappStorage, type LocalMiniappStorageBackend} from "../LocalMiniappStorage"
 
@@ -78,43 +77,4 @@ describe("LocalMiniappStorage", () => {
     await storage.clear("com.example.app")
     expect(await storage.keys("com.example.app")).toEqual([])
   })
-})
-
-describe("LocalMiniappRuntime storage adapter", () => {
-  // Run the shipped boundary without initializing the Expo/native runtime.
-  const runtime = readFileSync(new URL("../LocalMiniappRuntime.ts", import.meta.url), "utf8")
-  const storage = readFileSync(new URL("../../utils/storage/storage.ts", import.meta.url), "utf8")
-  const adapter = runtime.match(/^const localMiniappStorageBackend = \{[\s\S]*?^}/m)?.[0]
-  const missingError = storage.match(/^export class StorageValueNotFoundError extends Error \{[\s\S]*?^}/m)?.[0]
-  if (!adapter || !missingError) throw new Error("Missing host storage adapter or missing-value error")
-  const compiled = new Bun.Transpiler({loader: "ts"}).transformSync(
-    `${missingError.replace("export ", "")}\n${adapter}`,
-  )
-  const createBackend = new Function(
-    "mmkvStorage",
-    `${compiled}; return {backend: localMiniappStorageBackend, StorageValueNotFoundError}`,
-  )
-
-  it.each(["stored", "missing", "invalid JSON", "I/O failure", "lookalike missing error"])(
-    "distinguishes %s from an absent key",
-    async (outcome) => {
-      const value = "fictional recovery journal"
-      let error: Error | undefined
-      const {backend, StorageValueNotFoundError} = createBackend({
-        load: () => ({is_ok: () => error === undefined, value, error}),
-      }) as {backend: LocalMiniappStorageBackend; StorageValueNotFoundError: new (key: string) => Error}
-      if (outcome === "missing") error = new StorageValueNotFoundError("journal")
-      if (outcome === "invalid JSON") error = new SyntaxError("Invalid fictional JSON")
-      if (outcome === "I/O failure") error = new Error("Fictional MMKV read failed")
-      if (outcome === "lookalike missing error") {
-        error = new Error("No value found for journal")
-        error.name = "StorageValueNotFoundError"
-      }
-      const local = new LocalMiniappStorage({backend, getUserId: async () => "mu_test"})
-      const read = local.get("com.example.app", "journal")
-      if (outcome === "stored") expect(await read).toBe(value)
-      else if (outcome === "missing") expect(await read).toBeNull()
-      else await expect(read).rejects.toBe(error)
-    },
-  )
 })

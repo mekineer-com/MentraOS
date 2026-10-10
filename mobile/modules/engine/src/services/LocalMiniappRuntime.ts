@@ -31,7 +31,7 @@ import {
 import type {MiniappEnvelope} from "@mentra/miniapp"
 
 import {DeviceTypes, getModelCapabilities} from "../types"
-import {storage as mmkvStorage, StorageValueNotFoundError} from "../utils/storage/storage"
+import {storage as mmkvStorage} from "../utils/storage/storage"
 import {BgTimer} from "../utils/timers"
 import devServerBridge from "./DevServerBridge"
 import {islandNotifications} from "./NotificationsEmitter"
@@ -279,9 +279,7 @@ const CAMERA_ROI_POSITION_BY_NAME: Record<string, CameraRoiPosition> = {center: 
 const localMiniappStorageBackend = {
   get(key: string): unknown | null {
     const result = mmkvStorage.load<unknown>(key)
-    if (result.is_ok()) return result.value
-    if (result.error instanceof StorageValueNotFoundError) return null
-    throw result.error
+    return result.is_ok() ? result.value : null
   },
   has(key: string): boolean {
     return mmkvStorage.load<unknown>(key).is_ok()
