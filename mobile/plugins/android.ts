@@ -246,7 +246,7 @@ gradle.taskGraph.whenReady { graph ->
     // 2. Add externalNativeBuild configuration in defaultConfig
     if (!buildGradle.includes("externalNativeBuild")) {
       buildGradle = buildGradle.replace(
-        /(buildConfigField\s+"String",\s+"REACT_NATIVE_RELEASE_LEVEL"[^}]+)/,
+        /^([ \t]*buildConfigField\s+"String",\s+"REACT_NATIVE_RELEASE_LEVEL"[^\r\n]*)$/m,
         `$1
 
         externalNativeBuild {
