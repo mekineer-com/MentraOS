@@ -258,15 +258,17 @@ describe("Runtime transcript delivery survives a multi-attempt reconnect", () =>
     acknowledgeUdpProbe(socket, firstProbeId);
     expect(runtime.getStatus().audioTransport).toBe("udp");
 
+    await waitUntil(() => udpSent.length >= 2, 1_200);
+    const outstandingProbeId = readProbeId(udpSent.at(-1)!);
     await runtime.setSubscriptions([]);
     const idleProbeCount = udpSent.length;
     await wait(1_050);
     expect(udpSent).toHaveLength(idleProbeCount);
-    acknowledgeUdpProbe(socket, firstProbeId);
+    acknowledgeUdpProbe(socket, outstandingProbeId);
     expect(runtime.getStatus().audioTransport).toBe("ws");
     await runtime.setSubscriptions([{ kind: "transcription", language: { mode: "auto" } }]);
     expect(udpSent).toHaveLength(idleProbeCount + 1);
-    acknowledgeUdpProbe(socket, firstProbeId);
+    acknowledgeUdpProbe(socket, outstandingProbeId);
     expect(runtime.getStatus().audioTransport).toBe("ws");
     runtime.sendAudioFrame(new Uint8Array([9]));
     expect(socket.sentBinary).toHaveLength(1);

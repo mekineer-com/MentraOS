@@ -5567,20 +5567,21 @@ class LocalMiniappRuntime {
     this.ensureCloudResultsWired()
     const subs = this.buildCloudAudioSubscriptions(cloudStreams)
     const nextKey = this.audioSubscriptionKey(subs)
-    if (!this.cloudAudioSubscriptionSync.begin(nextKey)) return
+    const generation = this.cloudAudioSubscriptionSync.begin(nextKey)
+    if (generation === null) return
     console.log(
       `${LOG_TAG}: updateCloudSubscriptions streams=[${Array.from(cloudStreams).join(", ")}] cloudSubs=${subs.length}`,
     )
     cloudClientService
       .setSubscriptions(subs)
       .then(() => {
-        this.cloudAudioSubscriptionSync.succeeded(nextKey)
+        this.cloudAudioSubscriptionSync.succeeded(generation)
       })
       .catch((err) => {
         // Best-effort: the cloud may not be connected yet. Keep failed writes
         // retryable; otherwise a reconnect that recomputes the same desired
         // transcription set gets deduped and local captions never recover.
-        this.cloudAudioSubscriptionSync.failed(nextKey)
+        this.cloudAudioSubscriptionSync.failed(generation)
         console.warn(`${LOG_TAG}: cloud setSubscriptions failed: ${(err as Error)?.message ?? err}`)
       })
   }

@@ -8,72 +8,94 @@ describe("CloudAudioSubscriptionSync", () => {
   test("dedupes an identical subscription write while it is still in flight", () => {
     const sync = new CloudAudioSubscriptionSync()
 
-    expect(sync.begin("transcription:auto")).toBe(true)
-    expect(sync.begin("transcription:auto")).toBe(false)
+    expect(sync.begin("transcription:auto")).toBe(1)
+    expect(sync.begin("transcription:auto")).toBeNull()
   })
 
   test("keeps a failed write retryable so reconnect resync can send it again", () => {
     const sync = new CloudAudioSubscriptionSync()
 
-    expect(sync.begin("transcription:auto")).toBe(true)
-    sync.failed("transcription:auto")
+    expect(sync.begin("transcription:auto")).toBe(1)
+    sync.failed(1)
 
-    expect(sync.begin("transcription:auto")).toBe(true)
+    expect(sync.begin("transcription:auto")).toBe(2)
   })
 
   test("dedupes the same key only after the cloud write succeeds", () => {
     const sync = new CloudAudioSubscriptionSync()
 
-    expect(sync.begin("transcription:auto")).toBe(true)
-    sync.succeeded("transcription:auto")
+    expect(sync.begin("transcription:auto")).toBe(1)
+    sync.succeeded(1)
 
-    expect(sync.begin("transcription:auto")).toBe(false)
-    expect(sync.begin("transcription:en-US")).toBe(true)
+    expect(sync.begin("transcription:auto")).toBeNull()
+    expect(sync.begin("transcription:en-US")).toBe(2)
   })
 
   test("converges to the final desired set under A -> B -> A -> B churn with all writes in flight", () => {
     const sync = new CloudAudioSubscriptionSync()
     // Every distinct desired set while the prior write is still in flight must
     // be sent; only exact in-flight duplicates are skipped.
-    expect(sync.begin("A")).toBe(true) // A in flight
-    expect(sync.begin("B")).toBe(true) // B in flight (A not yet done)
-    expect(sync.begin("A")).toBe(true) // A again — different from in-flight B
-    expect(sync.begin("B")).toBe(true) // B again — different from in-flight A
-    expect(sync.begin("B")).toBe(false) // exact duplicate of the in-flight B — skip
+    expect(sync.begin("A")).toBe(1) // A in flight
+    expect(sync.begin("B")).toBe(2) // B in flight (A not yet done)
+    expect(sync.begin("A")).toBe(3) // A again — different from in-flight B
+    expect(sync.begin("B")).toBe(4) // B again — different from in-flight A
+    expect(sync.begin("B")).toBeNull() // exact duplicate of the in-flight B — skip
     // Writes resolve in arbitrary order; the machine must never wedge.
-    sync.succeeded("A")
-    sync.succeeded("B")
-    sync.succeeded("A")
-    sync.succeeded("B")
+    sync.succeeded(1)
+    sync.succeeded(2)
+    sync.succeeded(3)
+    sync.succeeded(4)
     // Final desired B, nothing in flight -> deduped.
-    expect(sync.begin("B")).toBe(false)
+    expect(sync.begin("B")).toBeNull()
     // A new distinct set still goes.
-    expect(sync.begin("C")).toBe(true)
+    expect(sync.begin("C")).toBe(5)
   })
 
   test("a failed intermediate write does not strand a newer desired set", () => {
     const sync = new CloudAudioSubscriptionSync()
-    expect(sync.begin("fr-FR")).toBe(true)
-    sync.succeeded("fr-FR")
-    expect(sync.begin("empty")).toBe(true) // teardown
-    expect(sync.begin("fr-FR")).toBe(true) // re-subscribe while empty in flight
-    sync.failed("empty") // teardown write failed
-    sync.succeeded("fr-FR") // re-subscribe landed
+    expect(sync.begin("fr-FR")).toBe(1)
+    sync.succeeded(1)
+    expect(sync.begin("empty")).toBe(2) // teardown
+    expect(sync.begin("fr-FR")).toBe(3) // re-subscribe while empty in flight
+    sync.failed(2) // teardown write failed
+    sync.succeeded(3) // re-subscribe landed
     // fr-FR is applied and nothing pending -> deduped; cloud has fr-FR.
-    expect(sync.begin("fr-FR")).toBe(false)
+    expect(sync.begin("fr-FR")).toBeNull()
   })
 
-  test("out-of-order completion never wedges; at worst one redundant re-send", () => {
+  test("an older completion cannot suppress the next unsubscribe", () => {
     const sync = new CloudAudioSubscriptionSync()
-    expect(sync.begin("A")).toBe(true)
-    sync.succeeded("A")
-    expect(sync.begin("empty")).toBe(true)
-    expect(sync.begin("A")).toBe(true) // A re-desired while empty in flight
+    expect(sync.begin("A")).toBe(1)
+    sync.succeeded(1)
+    expect(sync.begin("empty")).toBe(2)
+    expect(sync.begin("A")).toBe(3) // A re-desired while empty in flight
     // A completes before empty (out of order):
-    sync.succeeded("A")
-    sync.succeeded("empty") // lastApplied transiently becomes "empty"
-    // Desiring A again re-sends (redundant, cloud version-dedups) — but NOT stuck.
-    expect(sync.begin("A")).toBe(true)
+    sync.succeeded(3)
+    sync.succeeded(2) // obsolete empty write cannot replace applied A
+    expect(sync.begin("A")).toBeNull()
+    expect(sync.begin("empty")).toBe(4)
+  })
+
+  test("an older same-key completion cannot settle a newer write", () => {
+    const sync = new CloudAudioSubscriptionSync()
+    expect(sync.begin("A")).toBe(1)
+    expect(sync.begin("B")).toBe(2)
+    expect(sync.begin("A")).toBe(3)
+    sync.succeeded(1)
+    expect(sync.begin("A")).toBeNull()
+    sync.failed(3)
+    expect(sync.begin("A")).toBe(4)
+  })
+
+  test("a failed latest write invalidates the previously applied cache", () => {
+    const sync = new CloudAudioSubscriptionSync()
+    expect(sync.begin("A")).toBe(1)
+    sync.succeeded(1)
+    expect(sync.begin("B")).toBe(2)
+    expect(sync.begin("A")).toBe(3)
+    sync.succeeded(2)
+    sync.failed(3)
+    expect(sync.begin("A")).toBe(4)
   })
 
   test("re-sends the applied set when a different write is still in flight (A -> B -> A churn)", () => {
@@ -83,17 +105,17 @@ describe("CloudAudioSubscriptionSync", () => {
     // NOT be deduped, or the cloud strands on the empty set and captions die.
     const sync = new CloudAudioSubscriptionSync()
 
-    expect(sync.begin("transcription:fr-FR")).toBe(true)
-    sync.succeeded("transcription:fr-FR") // fr-FR applied
+    expect(sync.begin("transcription:fr-FR")).toBe(1)
+    sync.succeeded(1) // fr-FR applied
 
-    expect(sync.begin("empty")).toBe(true) // teardown write goes in flight...
+    expect(sync.begin("empty")).toBe(2) // teardown write goes in flight...
     // ...and before it resolves, the re-subscribe recomputes fr-FR:
-    expect(sync.begin("transcription:fr-FR")).toBe(true)
+    expect(sync.begin("transcription:fr-FR")).toBe(3)
 
     // The empty write lands late; the version counter keeps fr-FR at the cloud.
-    sync.succeeded("empty")
-    sync.succeeded("transcription:fr-FR")
+    sync.succeeded(2)
+    sync.succeeded(3)
     // A later identical fr-FR with nothing in flight is still correctly deduped.
-    expect(sync.begin("transcription:fr-FR")).toBe(false)
+    expect(sync.begin("transcription:fr-FR")).toBeNull()
   })
 })

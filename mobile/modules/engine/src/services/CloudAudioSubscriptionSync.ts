@@ -17,11 +17,12 @@
 export class CloudAudioSubscriptionSync {
   private lastAppliedKey = ""
   private pendingKey = ""
+  private generation = 0
 
-  public begin(nextKey: string): boolean {
+  public begin(nextKey: string): number | null {
     // Exact duplicate of the write already in flight — nothing to do.
     if (nextKey === this.pendingKey) {
-      return false
+      return null
     }
     // Matches the last successfully applied set, but ONLY skip when nothing
     // else is in flight. If a different write is pending (e.g. desired went
@@ -32,22 +33,22 @@ export class CloudAudioSubscriptionSync {
     // rapid A -> B -> A subscription churn. The cloud's own version counter
     // resolves ordering between the concurrent writes, so sending both is safe.
     if (nextKey === this.lastAppliedKey && this.pendingKey === "") {
-      return false
+      return null
     }
     this.pendingKey = nextKey
-    return true
+    return ++this.generation
   }
 
-  public succeeded(key: string): void {
-    if (this.pendingKey === key) {
-      this.pendingKey = ""
-    }
-    this.lastAppliedKey = key
+  public succeeded(generation: number): void {
+    if (generation !== this.generation || this.pendingKey === "") return
+    this.lastAppliedKey = this.pendingKey
+    this.pendingKey = ""
   }
 
-  public failed(key: string): void {
-    if (this.pendingKey === key) {
+  public failed(generation: number): void {
+    if (generation === this.generation) {
       this.pendingKey = ""
+      this.lastAppliedKey = ""
     }
   }
 }
