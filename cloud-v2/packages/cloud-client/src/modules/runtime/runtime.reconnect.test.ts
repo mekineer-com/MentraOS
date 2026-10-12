@@ -252,8 +252,26 @@ describe("Runtime transcript delivery survives a multi-attempt reconnect", () =>
     socket.handshake(ACK_WITH_AUDIO);
     await connectedPromise;
     expect(runtime.getStatus()).toEqual({ status: "connected", audioTransport: "ws" });
+    expect(udpSent).toHaveLength(0);
+    await runtime.setSubscriptions([{ kind: "transcription", language: { mode: "auto" } }]);
     const firstProbeId = readProbeId(udpSent.at(-1)!);
     acknowledgeUdpProbe(socket, firstProbeId);
+    expect(runtime.getStatus().audioTransport).toBe("udp");
+
+    await runtime.setSubscriptions([]);
+    const idleProbeCount = udpSent.length;
+    await wait(1_050);
+    expect(udpSent).toHaveLength(idleProbeCount);
+    acknowledgeUdpProbe(socket, firstProbeId);
+    expect(runtime.getStatus().audioTransport).toBe("ws");
+    await runtime.setSubscriptions([{ kind: "transcription", language: { mode: "auto" } }]);
+    expect(udpSent).toHaveLength(idleProbeCount + 1);
+    acknowledgeUdpProbe(socket, firstProbeId);
+    expect(runtime.getStatus().audioTransport).toBe("ws");
+    runtime.sendAudioFrame(new Uint8Array([9]));
+    expect(socket.sentBinary).toHaveLength(1);
+    socket.sentBinary.length = 0;
+    acknowledgeUdpProbe(socket, readProbeId(udpSent.at(-1)!));
     expect(runtime.getStatus().audioTransport).toBe("udp");
 
     socket.closeCb?.({ code: 1006, reason: "network lost" });
@@ -269,6 +287,15 @@ describe("Runtime transcript delivery survives a multi-attempt reconnect", () =>
     expect(socket.sentBinary).toHaveLength(1);
     acknowledgeUdpProbe(socket, readProbeId(udpSent.at(-1)!));
     expect(runtime.getStatus().audioTransport).toBe("udp");
+
+    await runtime.setSubscriptions([]);
+    const probesBeforeIdleReconnect = udpSent.length;
+    socket.closeCb?.({ code: 1006, reason: "idle network lost" });
+    await waitUntil(() => created === 3);
+    socket.handshake(ACK_WITH_AUDIO);
+    await waitUntil(() => runtime.getStatus().status === "connected");
+    await wait(1_050);
+    expect(udpSent).toHaveLength(probesBeforeIdleReconnect);
 
     runtime.close();
     expect(runtime.getStatus()).toEqual({ status: "disconnected", audioTransport: "none" });
@@ -341,6 +368,7 @@ describe("Runtime transcript delivery survives a multi-attempt reconnect", () =>
 
     // A failed initial DNS/connect/send produces no UDP ack. Audio must use WS
     // immediately, including before the first liveness timeout replaces it.
+    await runtime.setSubscriptions([{ kind: "transcription", language: { mode: "auto" } }]);
     expect(runtime.getStatus()).toEqual({ status: "connected", audioTransport: "ws" });
     const probesBeforeAudio = udpSent.length;
     runtime.sendAudioFrame(new Uint8Array([10, 11, 12]));

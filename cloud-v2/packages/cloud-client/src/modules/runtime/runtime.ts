@@ -393,11 +393,12 @@ export class Runtime implements RuntimeModule {
    */
   private configureAudio(ack: ConnectionAck): void {
     if (ack.audio) {
+      this.stopUdpLiveness();
       this.audio.configure(ack.audio);
       // Configured credentials do not prove DNS/connect or UDP delivery works.
       // Use the already-open WS while probes establish the new UDP route.
       this.updateStatus({ audioTransport: this.connection.isOpen ? "ws" : "none" });
-      this.startUdpLiveness();
+      this.syncUdpLiveness();
       return;
     }
     this.audio.close();
@@ -432,7 +433,10 @@ export class Runtime implements RuntimeModule {
     if (!ack) {
       throw new Error("Cannot set subscriptions before the session is connected");
     }
-    await this.subscriptions.set(subs, ack.sessionId);
+    const update = this.subscriptions.set(subs, ack.sessionId);
+    // set() records desired subscriptions before awaiting the REST write.
+    this.syncUdpLiveness();
+    await update;
   }
 
   /** Encrypt and send one audio frame over the UDP path (see RuntimeModule). */
@@ -531,6 +535,19 @@ export class Runtime implements RuntimeModule {
     }
     this.status = snapshot;
     this.emitter.emit("status", { ...snapshot });
+  }
+
+  private syncUdpLiveness(): void {
+    const available = !this.hostClosed && this.connection.isOpen && this.audio.sessionTag !== null;
+    if (available && this.subscriptions.currentSet().length > 0) {
+      if (this.udpProbeTimer === null) {
+        this.updateStatus({ audioTransport: "ws" });
+        this.startUdpLiveness();
+      }
+      return;
+    }
+    this.stopUdpLiveness();
+    this.updateStatus({ audioTransport: available ? "ws" : "none" });
   }
 
   private startUdpLiveness(): void {
