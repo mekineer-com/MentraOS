@@ -81,9 +81,9 @@ ${guard(pkg)}
   execFileSync("java", ["-Xmx128m", "-cp", groovyJar, "groovy.ui.GroovyMain", "-e", script], {timeout: 30000})
 })
 
-async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError, committerTime = Date.parse("2026-10-09T12:39Z") / 1000} = {}) {
+async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError, onPrepared = () => {}, onCommand = () => {}, onWrite = () => {}, onCopy = () => {}, onLog = () => {}, committerTime = Date.parse("2026-10-09T12:39Z") / 1000} = {}) {
   const environment = {ANDROID_SERIAL: "test-phone", MENTRAOS_PINNED_BUILD_NUMBER: "302010123", ...env}
-  const commands = [], copies = [], writes = [], backups = [], events = []
+  const commands = [], commandStates = [], copies = [], writes = [], backups = [], events = [], logs = []
   const buildNumberHelper = {}
   runInNewContext(compile("./build-number.mjs"), {
     exports: buildNumberHelper, process: {env: environment},
@@ -107,6 +107,8 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
   const command = async (strings, ...values) => {
     const command = String.raw({raw: strings}, ...values)
     commands.push(command)
+    commandStates.push({command, environment: {...environment}, env: files[".env"]})
+    onCommand(command, files)
     if (command.includes("expo prebuild")) nativeBuildNumber = buildNumberHelper.getBuildNumber()
     if (command.includes("assembleRelease")) {
       assert.equal(buildNumberHelper.getBuildNumber(), nativeBuildNumber)
@@ -121,7 +123,7 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
   const dollar = (...args) => Array.isArray(args[0]) ? command(...args) : command
   const promise = runInNewContext(`(async () => { ${compile("./android-release.mjs")} })()`, {
     exports: {}, process: {env: environment}, argv: name === undefined ? {} : {name}, $: dollar,
-    console: {log: () => {}},
+    console: {log: (message) => { logs.push(message); onLog(message, files) }},
     require: (name) => {
       if (name === "zx/globals") return {}
       if (name === "fs") return {constants}
@@ -130,9 +132,9 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
           assert.ok(path in files, `unexpected read: ${path}`)
           return files[path]
         },
-        writeFile: async (path, contents) => { writes.push(path); files[path] = contents },
+        writeFile: async (path, contents) => { writes.push(path); onWrite(path, contents, files); files[path] = contents },
         copyFile: async (source, destination, mode) => {
-          if (source !== ".env") { copies.push([source, destination]); return }
+          if (source !== ".env") { copies.push([source, destination]); onCopy(source, destination, files); return }
           assert.equal(mode, constants.COPYFILE_EXCL)
           if (backupError) throw Object.assign(new Error("backup failed"), {code: backupError})
           if (files[source] === undefined) throw Object.assign(new Error("no source"), {code: "ENOENT"})
@@ -145,7 +147,9 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
       if (name === "./set-build-env.mjs") return {setBuildEnv: async () => {
         events.push("setBuildEnv")
         files[".env"] = (files[".env"] ?? "") + "# setBuildEnv ran\n"
+        files[".env"] = files[".env"].replace(/^MAPBOX_DOWNLOADS_TOKEN=sk\..*\n/gm, "")
         Object.assign(environment, loadedEnv)
+        onPrepared(files)
       }}
       if (name === "./clear-autolinking-cache.mjs") return {syncAutolinkingCache: async () => {}}
       if (name === "./android-package-name.cjs") return {
@@ -161,7 +165,7 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
     },
   })
   await promise
-  return {environment, commands, copies, writes, files, backups, events, nativeBuildNumber}
+  return {environment, commands, commandStates, copies, writes, files, backups, events, logs, nativeBuildNumber}
 }
 
 test("backs up original env before mutation, numbers collisions and refuses backup failures", async () => {
@@ -180,16 +184,31 @@ test("backs up original env before mutation, numbers collisions and refuses back
   assert.deepEqual(fresh.events, ["setBuildEnv"])
 })
 
-test("fork CLI and dotenv builds synchronize JS version and copy actual Gradle APK identity", async () => {
+test("fork CLI and dotenv builds synchronize JS version and restore prepared env after publication", async () => {
   for (const options of [{name: "openalma"}, {loadedEnv: {MENTRAOS_BUILD_NAME: "openalma"}}]) {
-    const result = await runRelease(options)
+    let workingEnv
+    const result = await runRelease({...options,
+      onPrepared: (files) => { workingEnv = files[".env"] },
+      onLog: (message, files) => {
+        if (message.includes("successfully")) assert.equal(files[".env"], workingEnv)
+      },
+    })
     assert.equal(result.environment.EXPO_PUBLIC_MENTRAOS_VERSION, "3.2.1")
     assert.equal(result.environment.EXPO_PUBLIC_BUILD_ENV, "prod")
     assert.equal(result.environment.EXPO_PUBLIC_CLOUD_CORE_URL, CLOUDS.prod.core)
     assert.equal(result.environment.EXPO_PUBLIC_CLOUD_RUNTIME_URL, CLOUDS.prod.runtime)
-    assert.match(result.files[".env"], /EXPO_PUBLIC_MENTRAOS_VERSION=3.2.1\n/)
-    assert.match(result.files[".env"], /EXPO_PUBLIC_BUILD_ENV=prod\n/)
-    assert.ok(!result.files[".env"].includes("https://core.dev.example.invalid"))
+    for (const state of result.commandStates) {
+      assert.equal(state.environment.EXPO_PUBLIC_MENTRAOS_VERSION, "3.2.1")
+      assert.equal(state.environment.EXPO_PUBLIC_BUILD_ENV, "prod")
+      assert.equal(state.environment.EXPO_PUBLIC_CLOUD_CORE_URL, CLOUDS.prod.core)
+      assert.equal(state.environment.EXPO_PUBLIC_CLOUD_RUNTIME_URL, CLOUDS.prod.runtime)
+      assert.equal(state.environment.MENTRAOS_PINNED_BUILD_NUMBER, "302010123")
+      assert.match(state.env, /EXPO_PUBLIC_MENTRAOS_VERSION=3.2.1\n/)
+      assert.match(state.env, /EXPO_PUBLIC_BUILD_ENV=prod\n/)
+      assert.ok(!state.env.includes("https://core.dev.example.invalid"))
+    }
+    assert.equal(result.files[".env"], workingEnv)
+    assert.deepEqual(result.writes.filter((path) => path === ".env"), [".env", ".env"])
     assert.match(result.files[".env"], /OTHER=test/)
     assert.equal(result.nativeBuildNumber, 302010123)
     const clients = JSON.parse(result.files["android/app/google-services.json"]).client
@@ -212,13 +231,77 @@ test("coordinated beta/dev full JS identities and Stock/local variants are uncha
     assert.equal(result.environment.EXPO_PUBLIC_BUILD_ENV, env.EXPO_PUBLIC_BUILD_ENV)
     assert.equal(result.environment.EXPO_PUBLIC_CLOUD_CORE_URL, env.EXPO_PUBLIC_CLOUD_CORE_URL)
     assert.ok(!result.writes.includes(".env"))
+    assert.match(result.files[".env"], /EXPO_PUBLIC_BUILD_ENV=dev\n/)
+    assert.match(result.files[".env"], /# setBuildEnv ran\n/)
   }
   for (const name of [undefined, "stable"]) {
     const result = await runRelease({name, env: {EXPO_PUBLIC_MENTRAOS_VERSION: "3.2.0", MENTRAOS_PINNED_BUILD_NUMBER: undefined}})
     assert.equal(result.environment.EXPO_PUBLIC_MENTRAOS_VERSION, "3.2.0")
     assert.equal(result.copies.length, 0)
+    assert.ok(!result.writes.includes(".env"))
+    assert.match(result.files[".env"], /# setBuildEnv ran\n/)
     const packages = JSON.parse(result.files["android/app/google-services.json"]).client.map((client) => client.client_info.android_client_info.package_name)
     assert.deepEqual(packages, name ? ["com.mentra.mentra", `com.mentra.mentra.${name}`] : ["com.mentra.mentra"])
+  }
+})
+
+test("restores sanitized post-preparation env, including an originally absent file", async () => {
+  for (const original of ["OTHER=test\nMAPBOX_DOWNLOADS_TOKEN=sk.fictional-test-only\n", undefined]) {
+    let workingEnv
+    const result = await runRelease({name: "openalma", fileOverrides: {".env": original},
+      onPrepared: (files) => { workingEnv = files[".env"] },
+    })
+    assert.equal(result.files[".env"], workingEnv)
+    assert.match(result.files[".env"], /# setBuildEnv ran\n/)
+    assert.ok(!result.files[".env"].includes("MAPBOX_DOWNLOADS_TOKEN"))
+    if (original !== undefined) assert.equal(result.files[".env.orig"], original)
+    else assert.deepEqual(result.backups, [])
+  }
+})
+
+test("partial override write and downstream failures restore working env without success", async () => {
+  const fail = () => { throw new Error("injected failure") }
+  for (const failure of [
+    {onWrite: (path, contents, files) => {
+      if (path === ".env" && contents.includes("EXPO_PUBLIC_BUILD_ENV=prod")) {
+        files[path] = "partially written production override"
+        fail()
+      }
+    }},
+    ...["expo prebuild", "expo export", "assembleRelease", "adb devices", "install -r"].map((stage) => ({
+      env: {ANDROID_SERIAL: stage === "adb devices" ? "" : "test-phone"},
+      onCommand: (command) => { if (command.includes(stage)) fail() },
+    })),
+    {generatedPackage: "com.mentra.mentra"},
+    {metadata: {applicationId: "com.mentra.mentra"}},
+    {onCopy: fail},
+    {onWrite: (path) => { if (path === "android/app/google-services.json") fail() }},
+  ]) {
+    let files, workingEnv
+    const logs = []
+    await assert.rejects(runRelease({name: "openalma", ...failure,
+      onPrepared: (prepared) => { files = prepared; workingEnv = prepared[".env"] },
+      onLog: (message) => logs.push(message),
+    }), /injected failure|must use|Invalid OpenAlma/)
+    assert.equal(files[".env"], workingEnv)
+    assert.ok(!logs.some((message) => message.includes("successfully")))
+  }
+})
+
+test("restoration failure is loud and suppresses success", async () => {
+  for (const downstreamFailure of [false, true]) {
+    let envWrites = 0
+    const logs = []
+    await assert.rejects(runRelease({name: "openalma",
+      onWrite: (path) => {
+        if (path === ".env" && ++envWrites === 2) throw new Error("env restoration failed")
+      },
+      onCommand: (command) => {
+        if (downstreamFailure && command.includes("expo export")) throw new Error("export failed")
+      },
+      onLog: (message) => logs.push(message),
+    }), /env restoration failed/)
+    assert.ok(!logs.some((message) => message.includes("successfully")))
   }
 })
 

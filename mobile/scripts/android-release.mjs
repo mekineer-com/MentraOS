@@ -42,95 +42,103 @@ await setBuildEnv({syncAutolinking: false});
 const isOpenAlmaBuild = resolveAndroidPackageName().endsWith('.openalma')
 const forkPackage = 'com.mentra.mentra.openalma'
 let releaseBuildNumber = null
-if (isOpenAlmaBuild) {
-  const {version} = JSON.parse(await readFile('../package.json', 'utf-8'))
-  releaseBuildNumber = parsePinnedEnv(process.env.MENTRAOS_PINNED_BUILD_NUMBER)
-  const prefix = familyBuildNumberPrefix(version)
-  if (releaseBuildNumber === null || releaseBuildNumber <= prefix || releaseBuildNumber > prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT) {
-    throw new Error(`OpenAlma publication requires an explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER in ${prefix + 1}..${prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}; use a number above the last published fork build`)
-  }
-  process.env.MENTRAOS_PINNED_BUILD_NUMBER = String(releaseBuildNumber)
-  if (!process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
-    const releaseEnv = {
-      EXPO_PUBLIC_MENTRAOS_VERSION: version,
-      EXPO_PUBLIC_BUILD_ENV: 'prod',
-      EXPO_PUBLIC_CLOUD_CORE_URL: CLOUDS.prod.core,
-      EXPO_PUBLIC_CLOUD_RUNTIME_URL: CLOUDS.prod.runtime,
+let workingEnv = null
+try {
+  if (isOpenAlmaBuild) {
+    const {version} = JSON.parse(await readFile('../package.json', 'utf-8'))
+    releaseBuildNumber = parsePinnedEnv(process.env.MENTRAOS_PINNED_BUILD_NUMBER)
+    const prefix = familyBuildNumberPrefix(version)
+    if (releaseBuildNumber === null || releaseBuildNumber <= prefix || releaseBuildNumber > prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT) {
+      throw new Error(`OpenAlma publication requires an explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER in ${prefix + 1}..${prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}; use a number above the last published fork build`)
     }
-    let env = await readFile('.env', 'utf-8')
-    for (const [key, value] of Object.entries(releaseEnv)) {
-      process.env[key] = value
-      env = env.replace(new RegExp(`^${key}=.*\\r?\\n?`, 'gm'), '') + `\n${key}=${value}\n`
+    process.env.MENTRAOS_PINNED_BUILD_NUMBER = String(releaseBuildNumber)
+    if (!process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
+      const releaseEnv = {
+        EXPO_PUBLIC_MENTRAOS_VERSION: version,
+        EXPO_PUBLIC_BUILD_ENV: 'prod',
+        EXPO_PUBLIC_CLOUD_CORE_URL: CLOUDS.prod.core,
+        EXPO_PUBLIC_CLOUD_RUNTIME_URL: CLOUDS.prod.runtime,
+      }
+      let env = await readFile('.env', 'utf-8')
+      workingEnv = env
+      for (const [key, value] of Object.entries(releaseEnv)) {
+        process.env[key] = value
+        env = env.replace(new RegExp(`^${key}=.*\\r?\\n?`, 'gm'), '') + `\n${key}=${value}\n`
+      }
+      await writeFile('.env', env)
     }
-    await writeFile('.env', env)
+  }
+
+  console.log('Building Android release...');
+  if (nameSuffix) {
+    console.log(`  Variant: MENTRAOS_BUILD_NAME=${nameSuffix}`)
+  }
+
+  // Prebuild Android (reads MENTRAOS_BUILD_NAME via app.config.ts)
+  await $({ stdio: 'inherit' })`bun expo prebuild --platform android`;
+  if (isOpenAlmaBuild) {
+    const gradle = await readFile('android/app/build.gradle', 'utf-8')
+    if (!new RegExp(`applicationId\\s+['"]${forkPackage.replaceAll('.', '\\.')}['"]`).test(gradle)) {
+      throw new Error(`Generated Android release must use ${forkPackage}`)
+    }
+  }
+
+  // Authoritative post-prebuild guard (same as android.mjs): compare the resolved
+  // graph and generated applicationId to the cached artifact, then wipe if a
+  // suffix / region switch left ReactNativeApplicationEntryPoint on the old package.
+  await syncAutolinkingCache();
+
+  // Patch the build-time copy of google-services.json to include a client entry
+  // for the suffixed package, since Firebase only knows about the base package.
+  // The cloned entry reuses the base Firebase app ID — fine for local/dev builds.
+  if (nameSuffix || isOpenAlmaBuild) {
+    const gsPath = 'android/app/google-services.json'
+    const gs = JSON.parse(await readFile(gsPath, 'utf-8'))
+    const newPkg = resolveAndroidPackageName()
+    const baseClient = gs.client?.find(
+      (c) => c.client_info?.android_client_info?.package_name === 'com.mentra.mentra',
+    )
+    const alreadyHas = gs.client?.some(
+      (c) => c.client_info?.android_client_info?.package_name === newPkg,
+    )
+    if (baseClient && !alreadyHas) {
+      const clone = JSON.parse(JSON.stringify(baseClient))
+      clone.client_info.android_client_info.package_name = newPkg
+      gs.client.push(clone)
+      await writeFile(gsPath, JSON.stringify(gs, null, 2))
+    }
+  }
+
+  // bundle js code:
+  await $({stdio: "inherit"})`bun expo export --platform android --clear`
+
+  // Build release APK
+  await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx3072m`;
+
+  // Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
+  // Mentra Live glasses are also attached (adb fails on "more than one device").
+  const apkPath = 'android/app/build/outputs/apk/release/app-release.apk'
+  if (isOpenAlmaBuild) {
+    const metadata = JSON.parse(await readFile('android/app/build/outputs/apk/release/output-metadata.json', 'utf-8'))
+    const apk = metadata.elements?.find((entry) => entry.outputFile === 'app-release.apk')
+    if (metadata.applicationId !== forkPackage || !apk || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(apk.versionName) || !Number.isSafeInteger(apk.versionCode) || apk.versionCode < 1) {
+      throw new Error('Invalid OpenAlma release APK identity or version metadata')
+    }
+    if (releaseBuildNumber !== null && apk.versionCode !== releaseBuildNumber) {
+      throw new Error('OpenAlma release APK build number does not match MENTRAOS_PINNED_BUILD_NUMBER')
+    }
+    const publicationPath = `android/app/build/outputs/apk/release/OpenAlma-Mentra-${apk.versionName}-${apk.versionCode}.apk`
+    await copyFile(apkPath, publicationPath)
+    console.log(`Publication APK: ${publicationPath}`)
+  }
+  const serial = await resolveAdbSerial()
+  console.log(`Installing APK on ${serial}...`)
+  await $({stdio: 'inherit'})`adb -s ${serial} install -r ${apkPath}`
+} finally {
+  if (workingEnv !== null) {
+    await writeFile('.env', workingEnv)
   }
 }
-
-console.log('Building Android release...');
-if (nameSuffix) {
-  console.log(`  Variant: MENTRAOS_BUILD_NAME=${nameSuffix}`)
-}
-
-// Prebuild Android (reads MENTRAOS_BUILD_NAME via app.config.ts)
-await $({ stdio: 'inherit' })`bun expo prebuild --platform android`;
-if (isOpenAlmaBuild) {
-  const gradle = await readFile('android/app/build.gradle', 'utf-8')
-  if (!new RegExp(`applicationId\\s+['"]${forkPackage.replaceAll('.', '\\.')}['"]`).test(gradle)) {
-    throw new Error(`Generated Android release must use ${forkPackage}`)
-  }
-}
-
-// Authoritative post-prebuild guard (same as android.mjs): compare the resolved
-// graph and generated applicationId to the cached artifact, then wipe if a
-// suffix / region switch left ReactNativeApplicationEntryPoint on the old package.
-await syncAutolinkingCache();
-
-// Patch the build-time copy of google-services.json to include a client entry
-// for the suffixed package, since Firebase only knows about the base package.
-// The cloned entry reuses the base Firebase app ID — fine for local/dev builds.
-if (nameSuffix || isOpenAlmaBuild) {
-  const gsPath = 'android/app/google-services.json'
-  const gs = JSON.parse(await readFile(gsPath, 'utf-8'))
-  const newPkg = resolveAndroidPackageName()
-  const baseClient = gs.client?.find(
-    (c) => c.client_info?.android_client_info?.package_name === 'com.mentra.mentra',
-  )
-  const alreadyHas = gs.client?.some(
-    (c) => c.client_info?.android_client_info?.package_name === newPkg,
-  )
-  if (baseClient && !alreadyHas) {
-    const clone = JSON.parse(JSON.stringify(baseClient))
-    clone.client_info.android_client_info.package_name = newPkg
-    gs.client.push(clone)
-    await writeFile(gsPath, JSON.stringify(gs, null, 2))
-  }
-}
-
-// bundle js code:
-await $({stdio: "inherit"})`bun expo export --platform android --clear`
-
-// Build release APK
-await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx3072m`;
-
-// Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
-// Mentra Live glasses are also attached (adb fails on "more than one device").
-const apkPath = 'android/app/build/outputs/apk/release/app-release.apk'
-if (isOpenAlmaBuild) {
-  const metadata = JSON.parse(await readFile('android/app/build/outputs/apk/release/output-metadata.json', 'utf-8'))
-  const apk = metadata.elements?.find((entry) => entry.outputFile === 'app-release.apk')
-  if (metadata.applicationId !== forkPackage || !apk || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(apk.versionName) || !Number.isSafeInteger(apk.versionCode) || apk.versionCode < 1) {
-    throw new Error('Invalid OpenAlma release APK identity or version metadata')
-  }
-  if (releaseBuildNumber !== null && apk.versionCode !== releaseBuildNumber) {
-    throw new Error('OpenAlma release APK build number does not match MENTRAOS_PINNED_BUILD_NUMBER')
-  }
-  const publicationPath = `android/app/build/outputs/apk/release/OpenAlma-Mentra-${apk.versionName}-${apk.versionCode}.apk`
-  await copyFile(apkPath, publicationPath)
-  console.log(`Publication APK: ${publicationPath}`)
-}
-const serial = await resolveAdbSerial()
-console.log(`Installing APK on ${serial}...`)
-await $({stdio: 'inherit'})`adb -s ${serial} install -r ${apkPath}`
 
 console.log('✅ Android release built and installed successfully!');
 if (nameSuffix) {
