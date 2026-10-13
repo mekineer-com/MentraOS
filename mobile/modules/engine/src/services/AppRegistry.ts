@@ -19,6 +19,7 @@
  */
 
 import {Directory, Paths, File} from "expo-file-system"
+import {createDownloadResumable} from "expo-file-system/legacy"
 import {unzip} from "react-native-zip-archive"
 import {createMMKV, type MMKV} from "react-native-mmkv"
 import semver from "semver"
@@ -164,12 +165,26 @@ async function downloadMiniAppZip(url: string): Promise<string> {
     }
   }
 
+  const download = createDownloadResumable(url, existingFile.uri)
+  let timedOut = false
+  let cancellation: Promise<void> | undefined
+  const timeout = setTimeout(() => {
+    timedOut = true
+    cancellation = download.cancelAsync()
+    // Hold cancellation errors until the writer settles; finally awaits them.
+    void cancellation.catch(() => {})
+  }, 60_000)
   try {
-    const output = await File.downloadFileAsync(url, downloadDir)
+    const output = await download.downloadAsync()
+    if (timedOut) throw new Error("Miniapp ZIP download timed out")
+    if (!output || output.status < 200 || output.status >= 300) throw new Error("DOWNLOAD_FAILED")
     return output.uri
   } catch (error) {
     console.error("ZIP: Error downloading zip file", error)
-    throw "DOWNLOAD_FAILED"
+    throw timedOut ? new Error("Miniapp ZIP download timed out") : error
+  } finally {
+    clearTimeout(timeout)
+    if (cancellation) await cancellation
   }
 }
 
@@ -248,6 +263,7 @@ async function unpackMiniApp(
   }
 
   const versionDir = new Directory(basePackageDir, version)
+  let backupDir: Directory | undefined
   try {
     if (expected?.rejectExistingVersion && versionDir.exists) {
       // The host may adopt a byte-identical bundled release after verifying a
@@ -257,11 +273,10 @@ async function unpackMiniApp(
       }
       throw new Error(`Miniapp ${packageName}@${version} is already installed`)
     }
-    if (!versionDir.exists) {
-      versionDir.create()
-    } else {
-      versionDir.delete()
-      versionDir.create()
+    if (versionDir.exists) {
+      const previous = new Directory(Paths.cache, `lma_backup-${Date.now()}`)
+      versionDir.move(previous)
+      backupDir = previous
     }
   } catch (error) {
     console.error("Error creating the version directory", error)
@@ -269,21 +284,26 @@ async function unpackMiniApp(
   }
 
   try {
-    const contents = appDir.list()
-    for (const item of contents) {
-      item.move(versionDir)
-    }
+    appDir.move(new Directory(basePackageDir, version))
   } catch (error) {
     console.error("Error moving the contents of the folder to the destination directory", error)
-    // With rejectExistingVersion, this invocation created the destination.
-    // Roll back here while the install queue is held, never from a caller's
-    // stale pre-download snapshot of which versions used to exist.
-    if (expected?.rejectExistingVersion && versionDir.exists) versionDir.delete()
+    try {
+      const failedVersion = new Directory(basePackageDir, version)
+      if (failedVersion.exists) failedVersion.delete()
+      if (backupDir?.exists) backupDir.move(failedVersion)
+    } catch (rollbackError) {
+      console.error("ZIP: Error restoring the previous version", rollbackError)
+    }
     throw "INSTALL_CONTENTS_FAILED"
   }
-
-  console.log("ZIP: local mini app installed at", versionDir.uri)
-  printDirectory(versionDir, 2)
+  try {
+    if (backupDir?.exists) backupDir.delete()
+  } catch (error) {
+    console.warn("ZIP: Could not remove the previous version backup", error)
+  }
+  const installedDir = new Directory(basePackageDir, version)
+  console.log("ZIP: local mini app installed at", installedDir.uri)
+  printDirectory(installedDir, 2)
   return {packageName, version}
 }
 
@@ -598,18 +618,27 @@ class AppRegistry {
     return Res.try_async(async () => {
       const trimmed = baseUrl.replace(/\/$/, "")
 
-      const manifestRes = await fetch(`${trimmed}/miniapp.json`)
-      if (!manifestRes.ok) {
-        throw new Error(`Failed to fetch miniapp.json: ${manifestRes.status}`)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 2000)
+      let manifest: Record<string, unknown>
+      try {
+        const manifestRes = await fetch(`${trimmed}/miniapp.json`, {signal: controller.signal})
+        if (!manifestRes.ok) {
+          throw new Error(`Failed to fetch miniapp.json: ${manifestRes.status}`)
+        }
+        manifest = (await manifestRes.json()) as Record<string, unknown>
+      } finally {
+        clearTimeout(timeout)
       }
-      const manifest = (await manifestRes.json()) as Record<string, unknown>
       const packageName = manifest.packageName as string | undefined
       const version = manifest.version as string | undefined
       const name = (manifest.name as string | undefined) ?? packageName ?? "Mini app"
       if (!packageName) throw new Error("miniapp.json missing packageName")
       if (!version) throw new Error("miniapp.json missing version")
 
-      const installRes = await appRegistry.installFromUrl(`${trimmed}/bundle.zip`)
+      const installRes = await this.installFromUrl(`${trimmed}/bundle.zip`, {
+        expectedPackageName: packageName, expectedVersion: version,
+      })
       if (installRes.is_error()) throw installRes.error
 
       return {packageName, version, name}

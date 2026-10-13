@@ -1,4 +1,4 @@
-import {File, Paths} from "expo-file-system"
+import {Directory, File, Paths} from "expo-file-system"
 import {engine, SETTINGS} from "@mentra/engine"
 import {createMMKV} from "react-native-mmkv"
 import {LogoutUtils} from "@/utils/LogoutUtils"
@@ -13,9 +13,12 @@ import {shouldHideMiniapp} from "./miniappVisibility"
 let mockDigest = "a".repeat(64)
 let mockScript = "verified call"
 let mockVersion = "2.1.29"
+let mockPackageName = "com.mentra.call"
 const mockDownload = jest.fn()
+const mockCancelDownload = jest.fn()
 const mockUnzip = jest.fn()
 const mockMove = jest.fn()
+const mockDirectoryDelete = jest.fn()
 const mockGetPreinstalledRegistry = jest.fn()
 
 jest.mock("@/services/MantleManager", () => ({__esModule: true, default: {cleanup: jest.fn(async () => {})}}))
@@ -81,15 +84,16 @@ jest.mock("expo-file-system", () => {
       fs.rmSync(this.uri)
     }
     move(target: TestDirectory) {
-      mockMove()
+      mockMove(this.uri, target.uri)
       const dest = path.join(target.uri, this.name)
       fs.renameSync(this.uri, dest)
       this.uri = dest
     }
-    static async downloadFileAsync(url: string, target: TestFile) {
+    static async downloadFileAsync(url: string, target: TestFile | TestDirectory) {
       await mockDownload(url)
-      target.write("archive")
-      return target
+      const file = target instanceof TestDirectory ? new TestFile(target, "bundle.zip") : target
+      file.write("archive")
+      return file
     }
   }
   class TestDirectory {
@@ -114,10 +118,12 @@ jest.mock("expo-file-system", () => {
         )
     }
     delete() {
+      mockDirectoryDelete(this.uri)
       fs.rmSync(this.uri, {recursive: true, force: true})
     }
     move(target: TestDirectory) {
-      const dest = path.join(target.uri, this.name)
+      mockMove(this.uri, target.uri)
+      const dest = target.exists ? path.join(target.uri, this.name) : target.uri
       fs.renameSync(this.uri, dest)
       this.uri = dest
     }
@@ -128,11 +134,29 @@ jest.mock("expo-file-system", () => {
     Paths: {document: path.join(root, "documents"), cache: path.join(root, "cache")},
   }
 })
+jest.mock("expo-file-system/legacy", () => ({
+  createDownloadResumable: (url: string, fileUri: string) => {
+    let cancelled = false
+    return {
+      downloadAsync: async () => {
+        await mockDownload(url)
+        if (cancelled) return undefined
+        const {File} = require("expo-file-system")
+        new File(fileUri).write("archive")
+        return {uri: fileUri, status: 200}
+      },
+      cancelAsync: async () => {
+        cancelled = true
+        await mockCancelDownload()
+      },
+    }
+  },
+}))
 jest.mock("react-native-zip-archive", () => ({
   unzip: async (_zip: string, target: string) => {
     await mockUnzip()
     const {File} = require("expo-file-system")
-    new File(target, "miniapp.json").write(JSON.stringify({packageName: "com.mentra.call", version: mockVersion}))
+    new File(target, "miniapp.json").write(JSON.stringify({packageName: mockPackageName, version: mockVersion}))
     new File(target, "call.js").write(mockScript)
     new File(target, "ui", "index.js").write("verified nested UI")
   },
@@ -172,17 +196,23 @@ beforeEach(async () => {
   const fs = require("node:fs")
   for (const dir of [Paths.document, Paths.cache]) fs.rmSync(dir, {recursive: true, force: true})
   mockDownload.mockReset()
+  mockCancelDownload.mockReset()
   mockUnzip.mockReset()
   mockMove.mockReset()
+  mockDirectoryDelete.mockReset()
   mockGetPreinstalledRegistry.mockReset()
   mockDigest = "a".repeat(64)
   mockScript = "verified call"
   mockVersion = "2.1.29"
+  mockPackageName = pkg
   jest.spyOn(deploymentStore, "getActive").mockReturnValue(workspace)
   expect((await registry.installFromLocalZip("consumer.zip")).is_ok()).toBe(true)
   expect(registry.getReleaseIdentity(pkg, version)?.source).toBe("bundled_asset")
 })
-afterEach(() => jest.restoreAllMocks())
+afterEach(() => {
+  jest.useRealTimers()
+  jest.restoreAllMocks()
+})
 afterAll(() => require("node:fs").rmSync(require("node:path").dirname(Paths.document), {recursive: true, force: true}))
 
 it("adopts an identical verified consumer release and restores consumer installation on workspace exit", async () => {
@@ -419,4 +449,195 @@ it("does not let a late consumer registry download overwrite a verified workspac
   expect(registry.getReleaseIdentity(pkg, version)?.deploymentId).toBe("enterprise")
   expect(shouldHideMiniapp(pkg, version)).toBe(false)
   await engine.settings.set(SETTINGS.show_mentra_call_ios.key, false)
+})
+
+it("models directory promotion to an absent path and updates the source URI", () => {
+  const source = new Directory(Paths.cache, "source")
+  source.create()
+  new File(source, "nested", "entry.js").write("complete bundle")
+  const target = new Directory(Paths.cache, "destination")
+  source.move(target)
+  expect(source.uri).toBe(target.uri)
+  expect(new Directory(Paths.cache, "source").exists).toBe(false)
+  expect(new File(target, "nested", "entry.js").textSync()).toBe("complete bundle")
+  const parent = new Directory(Paths.cache, "parent")
+  parent.create()
+  source.move(parent)
+  expect(source.uri).toBe(new Directory(parent, "destination").uri)
+})
+
+it("retains same-version contents, active pointer and metadata when promotion fails", async () => {
+  const identity = registry.getReleaseIdentity(pkg, version)
+  const active = storage.load<string>(`${pkg}_active_version`)
+  const oldManifest = new File(Paths.document, "lmas", pkg, version, "miniapp.json").textSync()
+  const extra = new File(Paths.document, "lmas", pkg, version, "old-only.js")
+  extra.write("keep on failed repair")
+  mockScript = "replacement call"
+  mockMove.mockImplementation((source: string) => {
+    if (source.startsWith(new Directory(Paths.cache, "lma_unzip").uri)) {
+      throw new Error("promotion failed")
+    }
+  })
+  const result = await registry.installFromLocalZip("repair.zip", {releaseIdentity: {source: "direct_download"}})
+  expect(result.is_error()).toBe(true)
+  expect(installedScript()).toBe("verified call")
+  expect(extra.textSync()).toBe("keep on failed repair")
+  expect(new File(Paths.document, "lmas", pkg, version, "miniapp.json").textSync()).toBe(oldManifest)
+  expect(new File(Paths.document, "lmas", pkg, version, "ui", "index.js").textSync()).toBe("verified nested UI")
+  expect(storage.load<string>(`${pkg}_active_version`)).toEqual(active)
+  expect(registry.getReleaseIdentity(pkg, version)).toEqual(identity)
+  expect(registry.getInstalledVersions(pkg)).toEqual([version])
+})
+
+it("replaces a complete same-version bundle and removes obsolete files", async () => {
+  const extra = new File(Paths.document, "lmas", pkg, version, "old-only.js")
+  extra.write("obsolete")
+  mockScript = "replacement call"
+  const result = await registry.installFromLocalZip("repair.zip", {releaseIdentity: {source: "direct_download"}})
+  expect(result.is_ok()).toBe(true)
+  expect(installedScript()).toBe("replacement call")
+  expect(extra.exists).toBe(false)
+  expect(new File(Paths.document, "lmas", pkg, version, "ui", "index.js").textSync()).toBe("verified nested UI")
+  expect(await registry.getActiveVersion(pkg)).toBe(version)
+  expect(registry.getReleaseIdentity(pkg, version)?.source).toBe("direct_download")
+  expect(registry.getInstalledVersions(pkg)).toEqual([version])
+})
+
+it("does not promote the replacement when moving the old version to backup fails", async () => {
+  const failure = new Error("backup move failed")
+  const errors = jest.spyOn(console, "error").mockImplementation(() => {})
+  const identity = registry.getReleaseIdentity(pkg, version)
+  const active = storage.load<string>(`${pkg}_active_version`)
+  mockMove.mockClear()
+  mockMove.mockImplementationOnce(() => {throw failure})
+  mockScript = "replacement call"
+  expect((await registry.installFromLocalZip("repair.zip")).is_error()).toBe(true)
+  expect(mockMove).toHaveBeenCalledTimes(1)
+  expect(installedScript()).toBe("verified call")
+  expect(storage.load<string>(`${pkg}_active_version`)).toEqual(active)
+  expect(registry.getReleaseIdentity(pkg, version)).toEqual(identity)
+  expect(errors).toHaveBeenCalledWith(expect.any(String), failure)
+})
+
+it("logs promotion and cleanup failures without reporting a successful repair", async () => {
+  const promotionFailure = new Error("partial promotion failed")
+  const cleanupFailure = new Error("partial destination cleanup failed")
+  const errors = jest.spyOn(console, "error").mockImplementation(() => {})
+  const identity = registry.getReleaseIdentity(pkg, version)
+  const active = storage.load<string>(`${pkg}_active_version`)
+  const target = new Directory(Paths.document, "lmas", pkg, version)
+  mockMove.mockClear()
+  mockMove.mockImplementation((source: string, destination: string) => {
+    if (source === new Directory(Paths.cache, "lma_unzip").uri) {
+      new Directory(destination).create()
+      new File(destination, "partial.js").write("partial replacement")
+      throw promotionFailure
+    }
+  })
+  mockDirectoryDelete.mockImplementation((uri: string) => {
+    if (uri === target.uri) throw cleanupFailure
+  })
+  expect((await registry.installFromLocalZip("repair.zip")).is_error()).toBe(true)
+  expect(errors).toHaveBeenCalledWith(expect.any(String), promotionFailure)
+  expect(errors).toHaveBeenCalledWith(expect.any(String), cleanupFailure)
+  expect(mockMove).toHaveBeenCalledTimes(2)
+  expect(storage.load<string>(`${pkg}_active_version`)).toEqual(active)
+  expect(registry.getReleaseIdentity(pkg, version)).toEqual(identity)
+  const backups = new Directory(Paths.cache).list().filter((item) => item.name.startsWith("lma_backup-"))
+  expect(backups).toHaveLength(1)
+  expect(new File(backups[0], "call.js").textSync()).toBe("verified call")
+})
+
+it.each(["package", "version"])("rejects a ZIP whose %s differs from the fetched manifest", async (mismatch) => {
+  jest.spyOn(global, "fetch").mockResolvedValue({
+    ok: true,
+    json: async () => ({packageName: pkg, version, name: "Test miniapp"}),
+  } as Response)
+  const identity = registry.getReleaseIdentity(pkg, version)
+  const active = storage.load<string>(`${pkg}_active_version`)
+  if (mismatch === "package") mockPackageName = "com.example.wrong"
+  else mockVersion = "9.9.9"
+  mockScript = "wrong identity"
+  const result = await registry.installFromJsonUrl("https://example.test/release")
+  expect(result.is_error()).toBe(true)
+  expect(installedScript()).toBe("verified call")
+  expect(storage.load<string>(`${pkg}_active_version`)).toEqual(active)
+  expect(registry.getReleaseIdentity(pkg, version)).toEqual(identity)
+  expect(registry.getInstalledVersions(pkg)).toEqual([version])
+  expect(registry.getInstalledVersions("com.example.wrong")).toEqual([])
+})
+
+it.each(["headers", "body"])("times out stalled manifest %s and permits the next attempt", async (phase) => {
+  jest.useFakeTimers()
+  let rejectStall!: (error: Error) => void
+  const stall = new Promise<Response>((_resolve, reject) => {rejectStall = reject})
+  const fetch = jest.spyOn(global, "fetch").mockImplementationOnce(async (_url, init) => {
+    init?.signal?.addEventListener("abort", () => rejectStall(new Error("manifest aborted")), {once: true})
+    return phase === "headers" ? stall : {ok: true, json: () => stall} as unknown as Response
+  }).mockResolvedValue({
+    ok: true,
+    json: async () => ({packageName: pkg, version, name: "Test miniapp"}),
+  } as Response)
+  let settled = false
+  const first = Promise.resolve(registry.installFromJsonUrl("https://example.test/stalled"))
+  void first.then(() => {settled = true})
+  try {
+    await jest.advanceTimersByTimeAsync(2000)
+    expect(settled).toBe(true)
+    expect((await first).is_error()).toBe(true)
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true)
+    expect(mockDownload).not.toHaveBeenCalled()
+    expect(installedScript()).toBe("verified call")
+    expect((await registry.installFromJsonUrl("https://example.test/next")).is_ok()).toBe(true)
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+  } finally {
+    rejectStall(new Error("test teardown"))
+    await first
+  }
+})
+
+it("waits for cancelled ZIP writer settlement before releasing the install queue", async () => {
+  jest.useFakeTimers()
+  mockUnzip.mockClear()
+  const started = deferred()
+  const writer = deferred()
+  const cancellation = deferred()
+  mockDownload.mockImplementationOnce(() => {
+    started.resolve()
+    return writer.promise
+  })
+  mockCancelDownload.mockImplementationOnce(() => cancellation.promise)
+  const identity = registry.getReleaseIdentity(pkg, version)
+  const active = storage.load<string>(`${pkg}_active_version`)
+  let settled = false
+  const first = Promise.resolve(registry.installFromUrl("https://example.test/stalled.zip"))
+  void first.then(() => {settled = true})
+  const next = Promise.resolve(registry.installFromUrl("https://example.test/next.zip"))
+  try {
+    await started.promise
+    await jest.advanceTimersByTimeAsync(60000)
+    expect(mockCancelDownload).toHaveBeenCalledTimes(1)
+    expect(settled).toBe(false)
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+    expect(mockUnzip).not.toHaveBeenCalled()
+    expect(installedScript()).toBe("verified call")
+    expect(storage.load<string>(`${pkg}_active_version`)).toEqual(active)
+    expect(registry.getReleaseIdentity(pkg, version)).toEqual(identity)
+    writer.resolve()
+    await jest.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+    cancellation.resolve()
+    expect((await first).is_error()).toBe(true)
+    expect((await next).is_ok()).toBe(true)
+    expect(mockDownload.mock.calls.map(([url]) => url)).toEqual([
+      "https://example.test/stalled.zip", "https://example.test/next.zip",
+    ])
+    expect(mockUnzip).toHaveBeenCalledTimes(1)
+    expect(mockCancelDownload).toHaveBeenCalledTimes(1)
+  } finally {
+    cancellation.resolve()
+    writer.resolve()
+    await Promise.all([first, next])
+  }
 })
