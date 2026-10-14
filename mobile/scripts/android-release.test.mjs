@@ -10,7 +10,7 @@ import {VARIANT_RE, resolveAndroidPackageName} from "./android-package-name.cjs"
 import {withDebugAbiFilters} from "./android-abi-filters.mjs"
 import {CLOUDS} from "../../.github/scripts/prepare-mobile-release-env.mjs"
 import {parsePinnedEnv} from "./local-build-number.mjs"
-import {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT, nonReleaseBuildNumber} from "../../.github/scripts/release-family.mjs"
+import {familyBuildNumberPrefix, BUILD_NUMBER_MAX_SEQUENCE, nonReleaseBuildNumber} from "../../.github/scripts/release-family.mjs"
 
 const require = createRequire(import.meta.url)
 const fork = "com.mentra.mentra.openalma"
@@ -160,7 +160,7 @@ async function runRelease({name, install, gradleJvmArgs, env = {}, loadedEnv = {
       }
       if (name === "../../.github/scripts/prepare-mobile-release-env.mjs") return {CLOUDS}
       if (name === "./local-build-number.mjs") return {parsePinnedEnv}
-      if (name === "../../.github/scripts/release-family.mjs") return {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}
+      if (name === "../../.github/scripts/release-family.mjs") return {familyBuildNumberPrefix, BUILD_NUMBER_MAX_SEQUENCE}
       throw new Error(`unexpected module: ${name}`)
     },
   })
@@ -322,10 +322,10 @@ test("restoration failure is loud and suppresses success", async () => {
 
 test("fork publication requires a release-family pin and exports that helper-derived number", async () => {
   for (const selection of [{name: "openalma"}, {loadedEnv: {MENTRAOS_BUILD_NAME: "openalma"}}]) {
-    for (const pin of [undefined, "", "0", "-1", "302010123junk", "1.5", "9007199254740992", "302000123", "302010000", "302013000", "302019999"]) {
+    for (const pin of [undefined, "", "0", "-1", "302010123junk", "1.5", "9007199254740992", "302000123", "302010000", "302020000"]) {
       await assert.rejects(runRelease({...selection, env: {MENTRAOS_PINNED_BUILD_NUMBER: pin}}), /explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER/)
     }
-    for (const pin of ["302010001", " 302012999 "]) {
+    for (const pin of ["302010001", " 302012999 ", "302014036", "302019999"]) {
       const result = await runRelease({...selection, env: {MENTRAOS_PINNED_BUILD_NUMBER: pin}})
       assert.equal(result.nativeBuildNumber, Number(pin))
       assert.equal(result.environment.MENTRAOS_PINNED_BUILD_NUMBER, String(Number(pin)))

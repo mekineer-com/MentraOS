@@ -8,7 +8,7 @@ import {syncAutolinkingCache} from './clear-autolinking-cache.mjs';
 import {VARIANT_RE, resolveAndroidPackageName} from './android-package-name.cjs';
 import {CLOUDS} from '../../.github/scripts/prepare-mobile-release-env.mjs';
 import {parsePinnedEnv} from './local-build-number.mjs';
-import {familyBuildNumberPrefix, BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT} from '../../.github/scripts/release-family.mjs';
+import {familyBuildNumberPrefix, BUILD_NUMBER_MAX_SEQUENCE} from '../../.github/scripts/release-family.mjs';
 
 // build only for real devices new arch:
 process.env.ORG_GRADLE_PROJECT_reactNativeArchitectures = 'arm64-v8a'
@@ -48,8 +48,8 @@ try {
     const {version} = JSON.parse(await readFile('../package.json', 'utf-8'))
     releaseBuildNumber = parsePinnedEnv(process.env.MENTRAOS_PINNED_BUILD_NUMBER)
     const prefix = familyBuildNumberPrefix(version)
-    if (releaseBuildNumber === null || releaseBuildNumber <= prefix || releaseBuildNumber > prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT) {
-      throw new Error(`OpenAlma publication requires an explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER in ${prefix + 1}..${prefix + BUILD_NUMBER_RELEASE_SEQUENCE_LIMIT}; use a number above the last published fork build`)
+    if (releaseBuildNumber === null || releaseBuildNumber <= prefix || releaseBuildNumber > prefix + BUILD_NUMBER_MAX_SEQUENCE) {
+      throw new Error(`OpenAlma publication requires an explicitly allocated MENTRAOS_PINNED_BUILD_NUMBER in ${prefix + 1}..${prefix + BUILD_NUMBER_MAX_SEQUENCE}; use a number above the last published fork build`)
     }
     process.env.MENTRAOS_PINNED_BUILD_NUMBER = String(releaseBuildNumber)
     if (!process.env.MENTRA_COORDINATED_RELEASE_CHANNEL && !process.env.MENTRAOS_NATIVE_MARKETING_VERSION) {
