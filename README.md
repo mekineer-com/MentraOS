@@ -34,6 +34,11 @@
 >
 > The tradeoff is deliberate: this fork is independently maintained, may lag upstream improvements, does not receive stock Store updates, and currently targets the operator-specific private Iris source at `http://10.77.0.1:6789`. Build it only as the separate `com.mentra.mentra.openalma` application with `MENTRAOS_BUILD_NAME=openalma` or `mobile/scripts/android-release.mjs --name openalma`; without that identity its updater is disabled. Iris remains a separate repository at `miniapps/openalma/` and is absent from this Git history. The handoff depends on Iris's pinned `@mentra/miniapp-cli@0.1.0-dev.1` patch, so revalidate release serving, profile transfer, and acknowledgement before changing that dependency. These minimal changes are based on upstream tag `mentra-v3.2.1-beta.631` and are not intended for upstream submission. Everything below is upstream MentraOS documentation.
 
+For a signed local candidate without phone installation, use
+`mobile/scripts/android-release.mjs --name openalma --no-install` with the
+allocated `MENTRAOS_PINNED_BUILD_NUMBER`. `--gradle-jvmargs` can override the
+default build heap; publishing remains a separate step.
+
 ## Write Once, Run on Any Smart Glasses
 
 MentraOS is how developers and businesses build smart glasses apps.

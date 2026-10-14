@@ -113,7 +113,7 @@ try {
   await $({stdio: "inherit"})`bun expo export --platform android --clear`
 
   // Build release APK
-  await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx3072m`;
+  await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=${argv['gradle-jvmargs'] ?? '-Xmx3072m'}`;
 
   // Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
   // Mentra Live glasses are also attached (adb fails on "more than one device").
@@ -131,16 +131,18 @@ try {
     await copyFile(apkPath, publicationPath)
     console.log(`Publication APK: ${publicationPath}`)
   }
-  const serial = await resolveAdbSerial()
-  console.log(`Installing APK on ${serial}...`)
-  await $({stdio: 'inherit'})`adb -s ${serial} install -r ${apkPath}`
+  if (argv.install !== false) {
+    const serial = await resolveAdbSerial()
+    console.log(`Installing APK on ${serial}...`)
+    await $({stdio: 'inherit'})`adb -s ${serial} install -r ${apkPath}`
+  }
 } finally {
   if (workingEnv !== null) {
     await writeFile('.env', workingEnv)
   }
 }
 
-console.log('✅ Android release built and installed successfully!');
+console.log(argv.install === false ? 'Android release built successfully (not installed).' : '✅ Android release built and installed successfully!');
 if (nameSuffix) {
   console.log(`   Package: com.mentra.mentra.${nameSuffix}`)
   console.log(`   App label: ${nameSuffix}`)

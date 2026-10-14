@@ -81,7 +81,7 @@ ${guard(pkg)}
   execFileSync("java", ["-Xmx128m", "-cp", groovyJar, "groovy.ui.GroovyMain", "-e", script], {timeout: 30000})
 })
 
-async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError, onPrepared = () => {}, onCommand = () => {}, onWrite = () => {}, onCopy = () => {}, onLog = () => {}, committerTime = Date.parse("2026-10-09T12:39Z") / 1000} = {}) {
+async function runRelease({name, install, gradleJvmArgs, env = {}, loadedEnv = {}, generatedPackage = fork, metadata = {}, fileOverrides = {}, backupError, onPrepared = () => {}, onCommand = () => {}, onWrite = () => {}, onCopy = () => {}, onLog = () => {}, committerTime = Date.parse("2026-10-09T12:39Z") / 1000} = {}) {
   const environment = {ANDROID_SERIAL: "test-phone", MENTRAOS_PINNED_BUILD_NUMBER: "302010123", ...env}
   const commands = [], commandStates = [], copies = [], writes = [], backups = [], events = [], logs = []
   const buildNumberHelper = {}
@@ -122,7 +122,7 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
   }
   const dollar = (...args) => Array.isArray(args[0]) ? command(...args) : command
   const promise = runInNewContext(`(async () => { ${compile("./android-release.mjs")} })()`, {
-    exports: {}, process: {env: environment}, argv: name === undefined ? {} : {name}, $: dollar,
+    exports: {}, process: {env: environment}, argv: {name, install, 'gradle-jvmargs': gradleJvmArgs}, $: dollar,
     console: {log: (message) => { logs.push(message); onLog(message, files) }},
     require: (name) => {
       if (name === "zx/globals") return {}
@@ -167,6 +167,21 @@ async function runRelease({name, env = {}, loadedEnv = {}, generatedPackage = fo
   await promise
   return {environment, commands, commandStates, copies, writes, files, backups, events, logs, nativeBuildNumber}
 }
+
+test("candidate build skips phone discovery and installation, preserving default install", async () => {
+  let prepared
+  const candidate = await runRelease({name: "openalma", install: false, gradleJvmArgs: "-Xmx2048m",
+    env: {ANDROID_SERIAL: ""}, onPrepared: files => { prepared = files[".env"] },
+    onCommand: command => assert.ok(!command.includes("adb")),
+  })
+  assert.equal(candidate.files[".env"], prepared)
+  assert.equal(candidate.copies.length, 1)
+  assert.match(candidate.commands.find(command => command.includes("assembleRelease")), /-Dorg.gradle.jvmargs=-Xmx2048m/)
+  assert.ok(candidate.logs.includes("Android release built successfully (not installed)."))
+  const installed = await runRelease({name: "openalma"})
+  assert.ok(installed.commands.some(command => command.includes("adb -s test-phone install -r")))
+  assert.match(installed.commands.find(command => command.includes("assembleRelease")), /-Dorg.gradle.jvmargs=-Xmx3072m/)
+})
 
 test("backs up original env before mutation, numbers collisions and refuses backup failures", async () => {
   for (const fileOverrides of [{}, {".env.orig": "older", ".env2.orig": "also older"}]) {
