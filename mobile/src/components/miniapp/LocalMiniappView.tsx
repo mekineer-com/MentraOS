@@ -31,7 +31,7 @@ import {getStreamPreviewCoordinator, STREAM_PREVIEW_BIND_TIMEOUT_MS} from "@/ser
  * JSContext spawn (idempotent), WebView mount + UI-router binding, loading
  * affordance, and dev hot-reload. The always-on JSContext lives in
  * MentraJSRouter and survives this component unmounting — only the WebView is
- * torn down (see the launch effect's cleanup, which unbinds the WebView).
+ * torn down (ref detach unbinds the WebView).
  *
  * This was previously the body of the `/applet/local` route; it's now a
  * component so the <Compositor /> overlay can mount/unmount it as a miniapp is
@@ -93,6 +93,7 @@ function LocalMiniappView({
 
   const viewShotRef = useRef<View | null>(null)
   const webViewRef = useRef<WebView | null>(null)
+  const uiBindingCleanupRef = useRef<(() => void) | null>(null)
   const appStateRef = useRef<AppStateStatus>(AppState.currentState)
   const spaDepth = useRef(0)
   const nativeCanGoBack = useRef(false)
@@ -342,8 +343,7 @@ function LocalMiniappView({
       // Deliberately AFTER the spawn, not before: if we were superseded while
       // spawning, leave the JSContext alive (background miniapps keep running
       // across UI close) but don't touch UI state for a view we no longer
-      // show. The only cleanup this component owes is unbinding the WebView
-      // (handled by the effect's return).
+      // show. WebView binding cleanup belongs to ref detach, not this launch.
       checkpoint()
 
       setUiReleased(!getMentraJS()?.uiRouter.isUiHeld(packageName))
@@ -397,7 +397,6 @@ function LocalMiniappView({
     return () => {
       ac.abort()
       clearReadyTimer()
-      getMentraJS()?.uiRouter.unbindWebView(packageName)
       getStreamPreviewCoordinator().viewDestroyed(packageName, "miniapp-unmounted")
     }
   }, [packageName, version, devUrl, devPort, resetLoadState, clearReadyTimer, fail])
@@ -468,16 +467,21 @@ function LocalMiniappView({
   )
 
   // Bind UI router on ref attach so mentra.send/on routes outbound messages
-  // through `webViewRef.current.injectJavaScript(...)`. Unbinds on cleanup
-  // (see the launch effect's return) so backgrounding fires UI_CLOSE on the
+  // through `webViewRef.current.injectJavaScript(...)`. Ref detach unbinds
+  // so backgrounding fires UI_CLOSE on the
   // JSContext side and clears the inject hook.
   const handleRef = useCallback(
     (instance: WebView | null) => {
       webViewRef.current = instance
-      if (!instance || !packageName) return
+      if (!instance) {
+        uiBindingCleanupRef.current?.()
+        uiBindingCleanupRef.current = null
+        return
+      }
+      if (!packageName) return
       const mj = getMentraJS()
       if (!mj) return
-      mj.uiRouter.bindWebView(packageName, (js: string) => {
+      uiBindingCleanupRef.current = mj.uiRouter.bindWebView(packageName, (js: string) => {
         try {
           instance.injectJavaScript(js)
         } catch (e) {

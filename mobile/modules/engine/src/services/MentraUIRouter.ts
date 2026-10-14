@@ -178,10 +178,15 @@ export class MentraUIRouter {
    * once the WebView signals ready (see {@link routeFromWebView}).
    * Calling bindWebView on a packageName that already has a binding
    * replaces the previous one (defensive — should not happen in
-   * practice because only one WebView is open at a time).
+   * practice because only one WebView is open at a time). The returned cleanup
+   * releases only this binding, never a newer replacement.
    */
-  bindWebView(packageName: string, injectFn: MentraUIInjectFn): void {
-    this.bindings.set(packageName, {inject: injectFn})
+  bindWebView(packageName: string, injectFn: MentraUIInjectFn): () => void {
+    const binding = {inject: injectFn}
+    this.bindings.set(packageName, binding)
+    return () => {
+      if (this.bindings.get(packageName) === binding) this.unbindWebView(packageName)
+    }
   }
 
   /**

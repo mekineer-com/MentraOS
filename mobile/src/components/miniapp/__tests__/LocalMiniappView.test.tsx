@@ -1,20 +1,38 @@
-import {act, render} from "@testing-library/react-native"
+import {act, fireEvent, render} from "@testing-library/react-native"
 import {Platform} from "react-native"
 
 import LocalMiniappView from "../LocalMiniappView"
 import {useNavigationStore} from "@/stores/navigation"
 import {useRegisterCapsule} from "@/stores/capsule"
 import {miniappLauncher} from "@mentra/engine-host-internal"
+import {getMentraJS} from "@/services/mentraJsBootstrap"
+import {MentraUIRouter} from "../../../../modules/engine/src/services/MentraUIRouter"
 
 jest.mock("expo-router", () => ({router: {push: jest.fn(), replace: jest.fn(), back: jest.fn()}}))
-jest.mock("react-native-webview", () => ({WebView: "WebView"}))
+jest.mock("react-native-webview", () => {
+  const React = require("react")
+  const {View} = require("react-native")
+  const instances: {injectJavaScript: jest.Mock}[] = []
+  return {
+    instances,
+    WebView: React.forwardRef((props: object, ref: unknown) => {
+      const instance = React.useMemo(() => {
+        const handle = {injectJavaScript: jest.fn(), reload: jest.fn()}
+        instances.push(handle)
+        return handle
+      }, [])
+      React.useImperativeHandle(ref, () => instance, [instance])
+      return <View {...props} testID="webview" />
+    }),
+  }
+})
 jest.mock("@/contexts/ThemeContext", () => ({
   useAppTheme: () => ({theme: {isDark: false, colors: {background: "white"}}}),
 }))
 jest.mock("@/contexts/SaferAreaContext", () => ({
   useSaferAreaInsets: () => ({top: 0, bottom: 0, left: 0, right: 0}),
 }))
-jest.mock("@/services/mentraJsBootstrap", () => ({getMentraJS: () => null}))
+jest.mock("@/services/mentraJsBootstrap", () => ({getMentraJS: jest.fn()}))
 jest.mock("@/components/ignite", () => ({Text: "Text"}))
 jest.mock("@/effects/CapsuleMenu", () => () => {
   const {View} = require("react-native")
@@ -28,12 +46,16 @@ jest.mock("../MiniappSplash", () => (props: {error?: string}) => {
 })
 jest.mock("@mentra/engine-host-internal", () => ({
   miniappLauncher: {ensureRunning: jest.fn()},
+  localMiniappRuntime: {hasManifestPermission: () => false},
   buildMiniappGlobalsScript: () => "",
   buildMentraUiShim: () => "",
 }))
 
 jest.mock("@mentra/engine", () => ({
-  BgTimer: {setInterval: jest.fn(), clearInterval: jest.fn(), clearTimeout: jest.fn()},
+  BgTimer: {
+    setTimeout: jest.fn((cb, ms) => setTimeout(cb, ms)),
+    setInterval: jest.fn(), clearInterval: jest.fn(), clearTimeout: jest.fn(),
+  },
   SETTINGS: {dev_mode: {key: "dev_mode"}},
   useSetting: () => [false],
   engine: {miniapps: {clearForeground: jest.fn()}},
@@ -68,6 +90,8 @@ async function finishLaunch() {
 beforeEach(() => {
   jest.useFakeTimers()
   jest.clearAllMocks()
+  jest.requireMock("react-native-webview").instances.length = 0
+  jest.mocked(getMentraJS).mockReturnValue(null)
   jest.replaceProperty(Platform, "OS", "android")
   useNavigationStore.setState({interceptor: null})
   jest.mocked(miniappLauncher.ensureRunning).mockResolvedValue({uiUri: null, uiBaseDir: null} as never)
@@ -77,6 +101,36 @@ afterEach(() => {
   jest.useRealTimers()
 })
 
+it("keeps the retained WebView bound across a version change and ignores its cleanup after replacement", async () => {
+  const uiRouter = new MentraUIRouter({mentraJsDispatchToJs: jest.fn()})
+  jest.mocked(getMentraJS).mockReturnValue({uiRouter, router: {probeForegroundLiveness: jest.fn()}} as never)
+  jest.mocked(miniappLauncher.ensureRunning).mockImplementation(async (_package, hints) => ({
+    uiUri: `file:///fictional/${hints?.version}/ui/index.html`,
+    uiBaseDir: "file:///fictional/",
+  }) as never)
+  const instances = jest.requireMock("react-native-webview").instances
+  const oldView = render(<LocalMiniappView {...props} version="0.1.12" />)
+  await finishLaunch()
+  expect(uiRouter.isBound(props.packageName)).toBe(true)
+
+  oldView.rerender(<LocalMiniappView {...props} version="0.1.11" />)
+  await finishLaunch()
+  expect(instances).toHaveLength(1)
+  expect(oldView.getByTestId("webview").props.source.uri).toContain("0.1.11")
+  expect(uiRouter.isBound(props.packageName)).toBe(true)
+  fireEvent(oldView.getByTestId("webview"), "message", {nativeEvent: {data: '{"type":"ready"}'}})
+  uiRouter.routeFromBackground(props.packageName, {channel: "openalma:update", payload: {configured: false}})
+  expect(instances[0].injectJavaScript).toHaveBeenCalledWith(expect.stringContaining("openalma:update"))
+
+  const newView = render(<LocalMiniappView {...props} version="0.1.11" />)
+  await finishLaunch()
+  oldView.unmount()
+  expect(uiRouter.isBound(props.packageName)).toBe(true)
+  uiRouter.routeFromBackground(props.packageName, {channel: "openalma:update", payload: {configured: false}})
+  expect(instances[1].injectJavaScript).toHaveBeenCalledWith(expect.stringContaining("openalma:update"))
+  newView.unmount()
+  expect(uiRouter.isBound(props.packageName)).toBe(false)
+})
 it("exposes exit controls above the splash when startup resolves without a UI", async () => {
   const view = render(<LocalMiniappView {...props} />)
   await finishLaunch()

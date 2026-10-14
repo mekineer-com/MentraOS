@@ -31,6 +31,19 @@ describe("MentraUIRouter — routeFromWebView", () => {
     router = new MentraUIRouter(crust.binding)
   })
 
+  test("binding cleanup cannot remove its replacement and closes its own binding only once", () => {
+    const oldCleanup = router.bindWebView("com.foo", () => {})
+    const currentCleanup = router.bindWebView("com.foo", () => {})
+    oldCleanup()
+    expect(router.isBound("com.foo")).toBe(true)
+    expect(crust.dispatchCalls).toHaveLength(0)
+    currentCleanup()
+    currentCleanup()
+    expect(router.isBound("com.foo")).toBe(false)
+    expect(crust.dispatchCalls).toHaveLength(1)
+    expect(JSON.parse(crust.dispatchCalls[0]!.envelope.raw as string).payload.data.type).toBe("UI_CLOSE")
+  })
+
   test("ready → fires UI_OPEN to background via miniapp_event envelope", () => {
     bindCapture(router, "com.foo")
     router.routeFromWebView("com.foo", JSON.stringify({type: "ready"}))
