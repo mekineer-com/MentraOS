@@ -29,7 +29,7 @@ jest.mock("expo-application", () => ({
   nativeApplicationVersion: "3.2.0",
   getAndroidId: () => "test-phone",
 }))
-jest.mock("expo-device", () => ({deviceName: "Test Phone", modelName: "Test Model"}))
+jest.mock("expo-device", () => ({__esModule: true, deviceName: "Test Phone", modelName: "Test Model"}))
 jest.mock("@/utils/storage/storage", () => ({storage: {
   load: jest.fn(() => ({is_ok: () => false})), save: jest.fn(() => ({is_error: () => false})),
 }}))
@@ -82,6 +82,26 @@ beforeEach(() => {
   ;(storage.save as jest.Mock).mockImplementation(() => ({is_error: () => false}))
   Object.defineProperty(AppState, "currentState", {configurable: true, value: "active"})
   global.fetch = jest.fn()
+})
+
+test.each([
+  [" Test Model ", "Test Phone", "Test Model"],
+  [null, "Test Phone", "Test Phone"],
+  [" ", " Test Phone ", "Test Phone"],
+  [null, null, "Phone"],
+])("host label prefers the model and falls back when absent (%s)", async (model, name, expected) => {
+  const device = jest.requireMock("expo-device")
+  const modelProperty = jest.replaceProperty(device, "modelName", model)
+  const nameProperty = jest.replaceProperty(device, "deviceName", name)
+  try {
+    global.fetch = jest.fn(async () => ({ok: true, json: async () => ({user_id: "Test User"})})) as unknown as typeof fetch
+    await reportOpenAlmaHost("http://test.example")
+    const report = (global.fetch as jest.Mock).mock.calls.find(([url]) => url.endsWith("/host/seen"))
+    expect(JSON.parse(report[1].body).default_name).toBe(expected)
+  } finally {
+    modelProperty.restore()
+    nameProperty.restore()
+  }
 })
 
 test("Settings reuses the address editor and opens only an available host update", async () => {
@@ -238,7 +258,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
         device_session_id: "android-test-phone",
         host_package: "com.mentra.mentra.openalma",
         host_version: "3.2.0",
-        default_name: "Test Phone",
+        default_name: "Test Model",
       }),
     }),
   )
@@ -254,7 +274,7 @@ test("retries acknowledgement without reinstalling Iris", async () => {
       ? {"Content-Type": "application/json"} : {})
     if (url.endsWith("/host/seen")) expect(JSON.parse(init.body)).toEqual({
       user_id: "Test User", device_session_id: deviceSessionId,
-      host_package: "com.mentra.mentra.openalma", host_version: "3.2.0", default_name: "Test Phone",
+      host_package: "com.mentra.mentra.openalma", host_version: "3.2.0", default_name: "Test Model",
     })
   }
   offerId = "offer-2"
@@ -354,7 +374,7 @@ test("reports its own identity before Iris exists and ignores another installati
   expect(appRegistry.installFromJsonUrl).not.toHaveBeenCalled()
   const report = (global.fetch as jest.Mock).mock.calls.find(([url]) => url.endsWith("/host/seen"))
   expect(JSON.parse(report[1].body)).toMatchObject({
-    device_session_id: "android-test-phone", default_name: "Test Phone",
+    device_session_id: "android-test-phone", default_name: "Test Model",
   })
   expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledTimes(1)
   expect(localMiniappRuntime.setSimpleStorage).toHaveBeenCalledWith(

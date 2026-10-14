@@ -55,7 +55,7 @@ export async function reportOpenAlmaHost(baseUrl: string): Promise<string> {
         user_id: owner.user_id,
         device_session_id: deviceSessionId,
         ...host,
-        default_name: Device.deviceName?.trim() || Device.modelName?.trim() || "Phone",
+        default_name: Device.modelName?.trim() || Device.deviceName?.trim() || "Phone",
       }),
     })
     if (!response.ok) throw new OpenAlmaReportError(translate("firstconnection:httpError", {status: response.status}))
