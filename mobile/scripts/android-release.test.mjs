@@ -177,6 +177,8 @@ test("candidate build skips phone discovery and installation, preserving default
   assert.equal(candidate.files[".env"], prepared)
   assert.equal(candidate.copies.length, 1)
   assert.match(candidate.commands.find(command => command.includes("assembleRelease")), /-Dorg.gradle.jvmargs=-Xmx2048m/)
+  assert.match(candidate.commands.find(command => command.includes("assembleRelease")), /:app:createBundleReleaseJsAndAssets --rerun assembleRelease/)
+  assert.ok(candidate.commands.every(command => !command.includes("--rerun-tasks")))
   assert.ok(candidate.logs.includes("Android release built successfully (not installed)."))
   const installed = await runRelease({name: "openalma"})
   assert.ok(installed.commands.some(command => command.includes("adb -s test-phone install -r")))

@@ -112,8 +112,8 @@ try {
   // bundle js code:
   await $({stdio: "inherit"})`bun expo export --platform android --clear`
 
-  // Build release APK
-  await $({ stdio: 'inherit', cwd: 'android' })`./gradlew assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=${argv['gradle-jvmargs'] ?? '-Xmx3072m'}`;
+  // Gradle does not track bundle environment changes; refresh only packaged JS.
+  await $({ stdio: 'inherit', cwd: 'android' })`./gradlew :app:createBundleReleaseJsAndAssets --rerun assembleRelease --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=${argv['gradle-jvmargs'] ?? '-Xmx3072m'}`;
 
   // Install APK on device. Prefer ANDROID_SERIAL; otherwise pick a phone when
   // Mentra Live glasses are also attached (adb fails on "more than one device").
