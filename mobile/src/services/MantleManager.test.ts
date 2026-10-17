@@ -248,6 +248,29 @@ describe("MantleManager", () => {
     )
   })
 
+  it("forwards each PCM chunk's selected microphone source without changing the audio", () => {
+    const forward = jest.spyOn(localMiniappRuntime, "forwardEvent")
+    forward.mockClear()
+    const pcm = new Uint8Array([0, 127, 128, 255]).buffer
+
+    for (const source of ["glasses", "phone", "bluetooth", "bluetoothClassic", "future-mic", "", undefined]) {
+      emitBluetoothSdkEvent("mic_pcm", {
+        pcm,
+        sampleRate: 16000,
+        encoding: "pcm_s16le",
+        ...(source === undefined ? {} : {source}),
+      })
+
+      expect(forward).toHaveBeenLastCalledWith("audio_chunk", {
+        data: "AH+A/w==",
+        sampleRate: 16000,
+        format: "pcm_s16le",
+        source,
+      })
+    }
+    expect(forward).toHaveBeenCalledTimes(7)
+  })
+
   it("syncs the notification blocklist to Crust without an extra listener gate", async () => {
     ;(bluetoothSdkMock.updateBluetoothSettings as jest.Mock).mockClear()
     ;(crustModuleMock.setNotificationConfig as jest.Mock).mockClear()

@@ -1243,6 +1243,7 @@ class MantleManager {
             data: Buffer.from(event.pcm).toString("base64"),
             sampleRate: event.sampleRate,
             format: event.encoding,
+            source: event.source,
           })
         }),
       )

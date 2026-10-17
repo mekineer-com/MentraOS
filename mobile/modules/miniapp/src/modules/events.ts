@@ -161,6 +161,9 @@ export interface AudioChunkData {
   data: string
   sampleRate?: number
   format?: string
+  /** Reported microphone selection (e.g. glasses, phone, bluetooth, bluetoothClassic).
+   * Empty when unselected; older hosts may omit it. Not exact per-buffer provenance. */
+  source?: string
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import {describe, expect, test} from "bun:test"
 
 import {parseEnvelope, serializeEnvelope} from "./envelope"
 import {CLOUD_STATUS_STREAM} from "./modules/cloud"
+import type {AudioChunkData} from "./modules/events"
 import type {MeetingState} from "./modules/meeting"
 import {MiniappRequestType, MiniappResponseType} from "./protocol"
 import {MiniappSession} from "./session"
@@ -459,6 +460,36 @@ describe("MiniappSession event fan-out", () => {
     expect((received[0] as {buttonId: string}).buttonId).toBe("primary")
 
     unsub()
+  })
+
+  test("audio chunks preserve selected source metadata, including empty and legacy payloads", async () => {
+    const transport = new FakeTransport()
+    const session = new MiniappSession({transport})
+    const connected = session.connect()
+    transport.deliverFromPhone({
+      type: MiniappResponseType.CONNECT_ACK,
+      userId: "u",
+      packageName: "com.test.audio",
+      capabilities: null,
+    })
+    await connected
+
+    const received: AudioChunkData[] = []
+    const unsub = session.mic.onAudioChunk((chunk) => received.push(chunk))
+    for (const source of ["glasses", "phone", "bluetooth", "bluetoothClassic", "future-mic", "", undefined]) {
+      const chunk: AudioChunkData = {
+        data: "AH+A/w==",
+        sampleRate: 16000,
+        format: "pcm_s16le",
+        ...(source === undefined ? {} : {source}),
+      }
+      transport.deliverFromPhone({type: MiniappResponseType.EVENT, streamType: "audio_chunk", data: chunk})
+      expect(received.at(-1)).toEqual(chunk)
+      expect(received.at(-1)?.source).toBe(source)
+    }
+    expect(received).toHaveLength(7)
+    unsub()
+    session.disconnect()
   })
 
   test("cloud status pushes update session.cloud without sending SUBSCRIBE", async () => {
